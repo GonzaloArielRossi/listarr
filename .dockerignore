@@ -4,3 +4,6 @@
 !tmdb.go
 !web
 !web/**
+!docker
+!docker/entrypoint.sh
+!docker/air.toml

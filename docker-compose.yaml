@@ -1,20 +1,23 @@
 services:
   listarr:
-    build: .
+    build:
+      context: .
+      target: live
     image: film-wishlist:local
     container_name: listarr
+    init: true
     environment:
       TMDB_API_KEY: ${TMDB_API_KEY:-}
-      PUID: 1000
-      PGID: 1000
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
     ports:
       - "${WISHLIST_PORT:-8080}:8080"
     volumes:
+      - .:/src:ro
       - ./listarr-data:/data
-    #read_only: true
     restart: unless-stopped
     networks:
-       - proxy-network
+      - proxy-network
 
 networks:
   proxy-network:

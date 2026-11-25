@@ -1,12 +1,12 @@
 # Film & TV Wishlist
 
-A self-hosted wishlist for films and TV shows. It stores one shared list in a Docker volume.
+A self-hosted wishlist for films and TV shows.
 
 ## Run with Docker Compose
 
 1. Use your existing `.env`, or copy `.env.example` to `.env` if you need one.
-2. Set `TMDB_API_KEY` to your [TMDB API key](https://www.themoviedb.org/settings/api). TMDB supplies the data for both films and TV shows. You can keep `TVDB_API_KEY` in the same file. It stays out of the container.
-3. Run the following from this directory.
+2. Set `TMDB_API_KEY` to your [TMDB API key](https://www.themoviedb.org/settings/api). If your host user and group IDs differ from `1000:1000`, set `PUID` and `PGID` in `.env` to the values reported by `id -u` and `id -g`.
+3. From the checkout on the Docker host, run the following to start Listarr or to upgrade an existing installation to live reload.
 
    ```sh
    docker compose up --build -d
@@ -14,7 +14,9 @@ A self-hosted wishlist for films and TV shows. It stores one shared list in a Do
 
 4. Open [localhost:8080](http://localhost:8080). Set `WISHLIST_PORT` in `.env` if you need a different host port.
 
-The default port binding is local and the app has no sign-in. For a remote Docker host, use an SSH port forward or put the app behind an authenticated proxy you control.
+Compose uses the existing external `proxy-network`. Listarr has no sign-in, so restrict access to the published port or use an authenticated proxy.
+
+After setup, run `git pull` in the same checkout on the Docker host. The running container detects changes to the Go source and web assets, builds a new app binary, and restarts the app. Refresh your browser after the restart. Changes to the Dockerfile, Compose config, or the watcher setup still require `docker compose up --build -d`.
 
 ## Use the wishlist
 
@@ -24,9 +26,9 @@ The default port binding is local and the app has no sign-in. For a remote Docke
 - Use **Films** or **Shows** to filter by type alongside title and original language. Select the active button again to show both types.
 - Use **Remove** and confirm to move a title to **Trash**. Restore individual titles from Trash, or select **Empty Trash** and confirm to permanently delete all titles there.
 
-The named volume `wishlist-data` contains `/data/wishlist.json`. It survives a rebuild or `docker compose down`. To back up the list after saving your first title, run `docker compose cp wishlist:/data/wishlist.json ./wishlist-backup.json`.
+Compose stores the list in `./listarr-data/wishlist.json` on the host. Startup assigns the mounted directory and any existing wishlist file to `PUID:PGID`, then runs the app as that user. The file survives a rebuild or `docker compose down`. To back it up, copy `./listarr-data/wishlist.json`.
 
-The runtime image uses `scratch` with a stripped static Go binary and a certificate bundle for TMDB HTTPS. The HTML, CSS, and JavaScript are embedded in the binary. There is no database server, shell, or frontend build step.
+The Compose image includes Go and Air to rebuild the app from the read-only checkout mount. The default standalone Dockerfile target builds a static binary with embedded web assets in a `scratch` image.
 
 ## Run from source
 
