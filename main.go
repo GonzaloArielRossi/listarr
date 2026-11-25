@@ -43,11 +43,16 @@ func validKind(kind string) bool {
 type library struct {
 	mu     sync.Mutex
 	path   string
-	titles []title
+	titles []storedTitle
+}
+
+type storedTitle struct {
+	title
+	Trashed bool `json:"trashed,omitempty"`
 }
 
 func openLibrary(path string) (*library, error) {
-	list := &library{path: path, titles: []title{}}
+	list := &library{path: path}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return list, os.MkdirAll(filepath.Dir(path), 0700)
@@ -58,43 +63,89 @@ func openLibrary(path string) (*library, error) {
 	if err := json.Unmarshal(data, &list.titles); err != nil {
 		return nil, err
 	}
-	if list.titles == nil {
-		list.titles = []title{}
-	}
 	return list, nil
 }
 
 func (list *library) snapshot() []title {
+	return list.titlesByTrashStatus(false)
+}
+
+func (list *library) titlesByTrashStatus(trashed bool) []title {
 	list.mu.Lock()
 	defer list.mu.Unlock()
-	return slices.Clone(list.titles)
+	items := []title{}
+	for _, item := range list.titles {
+		if item.Trashed == trashed {
+			items = append(items, item.title)
+		}
+	}
+	return items
+}
+
+func (list *library) find(kind string, id int) (storedTitle, bool) {
+	list.mu.Lock()
+	defer list.mu.Unlock()
+	for _, item := range list.titles {
+		if item.Kind == kind && item.ID == id {
+			return item, true
+		}
+	}
+	return storedTitle{}, false
 }
 
 func (list *library) add(item title) (title, bool, error) {
 	list.mu.Lock()
 	defer list.mu.Unlock()
-	for _, current := range list.titles {
+	for index, current := range list.titles {
 		if item.Kind == current.Kind && item.ID == current.ID {
-			return current, false, nil
+			if !current.Trashed {
+				return current.title, false, nil
+			}
+			return current.title, true, list.setTrashed(index, false)
 		}
 	}
-	next := append([]title{item}, list.titles...)
+	next := append([]storedTitle{{title: item}}, list.titles...)
 	return item, true, list.save(next)
 }
 
-func (list *library) remove(kind string, id int) error {
+func (list *library) move(kind string, id int, trashed bool) (title, bool, error) {
 	list.mu.Lock()
 	defer list.mu.Unlock()
 	for index, item := range list.titles {
 		if item.Kind == kind && item.ID == id {
-			next := slices.Delete(slices.Clone(list.titles), index, index+1)
-			return list.save(next)
+			if item.Trashed == trashed {
+				return item.title, true, nil
+			}
+			return item.title, true, list.setTrashed(index, trashed)
 		}
 	}
-	return nil
+	return title{}, false, nil
 }
 
-func (list *library) save(next []title) error {
+// setTrashed requires the caller to hold list.mu.
+func (list *library) setTrashed(index int, trashed bool) error {
+	item := list.titles[index]
+	item.Trashed = trashed
+	next := make([]storedTitle, 0, len(list.titles))
+	next = append(next, item)
+	next = append(next, list.titles[:index]...)
+	next = append(next, list.titles[index+1:]...)
+	return list.save(next)
+}
+
+func (list *library) emptyTrash() error {
+	list.mu.Lock()
+	defer list.mu.Unlock()
+	next := slices.DeleteFunc(slices.Clone(list.titles), func(item storedTitle) bool {
+		return item.Trashed
+	})
+	if len(next) == len(list.titles) {
+		return nil
+	}
+	return list.save(next)
+}
+
+func (list *library) save(next []storedTitle) error {
 	file, err := os.CreateTemp(filepath.Dir(list.path), ".wishlist-*")
 	if err != nil {
 		return err
@@ -131,7 +182,19 @@ func (a app) handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/search", a.search)
 	mux.HandleFunc("POST /api/wishlist", a.add)
-	mux.HandleFunc("DELETE /api/wishlist/{kind}/{id}", a.remove)
+	mux.HandleFunc("DELETE /api/wishlist/{kind}/{id}", a.moveTitle(true))
+	mux.HandleFunc("GET /api/trash", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, a.library.titlesByTrashStatus(true))
+	})
+	mux.HandleFunc("POST /api/trash/{kind}/{id}/restore", a.moveTitle(false))
+	mux.HandleFunc("DELETE /api/trash", func(w http.ResponseWriter, r *http.Request) {
+		if err := a.library.emptyTrash(); err != nil {
+			log.Printf("empty trash: %v", err)
+			writeError(w, http.StatusInternalServerError, "Could not empty Trash.")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -190,16 +253,20 @@ func (a app) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, item := range a.library.snapshot() {
-		if item.Kind == selection.Kind && item.ID == selection.ID {
+	current, found := a.library.find(selection.Kind, selection.ID)
+	item := current.title
+	if found {
+		if !current.Trashed {
 			writeJSON(w, http.StatusOK, item)
 			return
 		}
-	}
-	item, err := a.tmdb.details(r.Context(), selection.Kind, selection.ID)
-	if err != nil {
-		writeTMDBError(w, err)
-		return
+	} else {
+		var err error
+		item, err = a.tmdb.details(r.Context(), selection.Kind, selection.ID)
+		if err != nil {
+			writeTMDBError(w, err)
+			return
+		}
 	}
 	item, added, err := a.library.add(item)
 	if err != nil {
@@ -214,19 +281,28 @@ func (a app) add(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, item)
 }
 
-func (a app) remove(w http.ResponseWriter, r *http.Request) {
-	kind := r.PathValue("kind")
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil || id < 1 || id > maxTMDBID || !validKind(kind) {
-		writeError(w, http.StatusBadRequest, "Select a valid film or TV show.")
-		return
+func (a app) moveTitle(trashed bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		kind := r.PathValue("kind")
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil || id < 1 || id > maxTMDBID || !validKind(kind) {
+			writeError(w, http.StatusBadRequest, "Select a valid film or TV show.")
+			return
+		}
+		item, found, err := a.library.move(kind, id, trashed)
+		if err != nil {
+			log.Printf("save wishlist: %v", err)
+			writeError(w, http.StatusInternalServerError, "Could not save the wishlist.")
+			return
+		}
+		if trashed {
+			w.WriteHeader(http.StatusNoContent)
+		} else if !found {
+			writeError(w, http.StatusNotFound, "This title is no longer in Trash.")
+		} else {
+			writeJSON(w, http.StatusOK, item)
+		}
 	}
-	if err := a.library.remove(kind, id); err != nil {
-		log.Printf("save wishlist: %v", err)
-		writeError(w, http.StatusInternalServerError, "Could not save the wishlist.")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

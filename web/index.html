@@ -12,19 +12,28 @@
   <div class="shell">
     <header class="masthead">
       <div class="brand"><span class="film-mark" aria-hidden="true"></span> Film &amp; TV</div>
+      <nav class="views" aria-label="Library">
+        <button class="button secondary" id="show-wishlist" type="button" aria-pressed="true">Wishlist</button>
+        <button class="button secondary" id="show-trash" type="button" aria-pressed="false">Trash</button>
+      </nav>
     </header>
 
     <main>
       <div class="heading">
         <div>
-          <h1>Wishlist</h1>
-          <p>Films and TV shows you want to get.</p>
+          <h1 id="view-title">Wishlist</h1>
+          <p id="view-detail">Films and TV shows you want to get.</p>
         </div>
         <button class="button primary" id="open-lookup" type="button" disabled><span aria-hidden="true">+</span> Add title</button>
+        <button class="button danger" id="empty-trash" type="button" hidden disabled>Empty Trash</button>
       </div>
 
-      <section aria-label="Saved titles">
-        <div class="toolbar">
+      <section aria-labelledby="view-title">
+        <div class="toolbar" id="wishlist-filters">
+          <div class="type-filters" role="group" aria-label="Filter by title type">
+            <button class="button secondary" type="button" data-kind="movie" aria-pressed="false">Films</button>
+            <button class="button secondary" type="button" data-kind="tv" aria-pressed="false">Shows</button>
+          </div>
           <label class="search-field">
             <span class="search-icon" aria-hidden="true"></span>
             <span class="sr-only">Search wishlist</span>
@@ -79,6 +88,17 @@
       <span id="page-number"></span>
       <button id="next-page" class="button secondary" type="button">Next</button>
     </div>
+  </dialog>
+
+  <dialog id="confirm" class="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
+    <div class="dialog-heading">
+      <h2 id="confirm-title"></h2>
+    </div>
+    <p id="confirm-detail"></p>
+    <form method="dialog" class="confirm-actions">
+      <button class="button secondary" type="submit" value="cancel" autofocus>Cancel</button>
+      <button class="button danger" id="confirm-action" type="submit" value="confirm"></button>
+    </form>
   </dialog>
 </body>
 </html>

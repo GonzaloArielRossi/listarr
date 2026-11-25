@@ -114,11 +114,19 @@ func TestWishlistFilmAndTV(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler = a.handler()
-	response := request(t, "GET", "/api/wishlist", "", 200)
-	var items []title
-	if err := json.Unmarshal(response.Body.Bytes(), &items); err != nil {
-		t.Fatal(err)
+	readItems := func(path string) []title {
+		t.Helper()
+		response := request(t, "GET", path, "", 200)
+		var items []title
+		if err := json.Unmarshal(response.Body.Bytes(), &items); err != nil {
+			t.Fatal(err)
+		}
+		if items == nil {
+			t.Fatalf("%s returned null instead of an array", path)
+		}
+		return items
 	}
+	items := readItems("/api/wishlist")
 	if len(items) != 2 || items[0].Date != "2025-11-09" || items[0].Status != "Returning Series" ||
 		items[0].OriginalLanguage != "fr" || items[0].IMDbID != "tt2000042" || items[1].PosterPath != "/signal.jpg" {
 		t.Fatalf("unexpected saved metadata: %+v", items)
@@ -132,5 +140,43 @@ func TestWishlistFilmAndTV(t *testing.T) {
 	}
 	if items := remaining.snapshot(); len(items) != 1 || items[0].Kind != "movie" || items[0].ID != 42 {
 		t.Fatalf("removing the TV show affected the film: %+v", items)
+	}
+	a.library = remaining
+	handler = a.handler()
+	if items := readItems("/api/trash"); len(items) != 1 || items[0].Kind != "tv" || items[0].IMDbID != "tt2000042" {
+		t.Fatalf("trash did not preserve the removed show: %+v", items)
+	}
+
+	request(t, "POST", "/api/trash/tv/42/restore", "", 200)
+	request(t, "POST", "/api/trash/tv/42/restore", "", 200)
+	if items := readItems("/api/wishlist"); len(items) != 2 || items[0].Kind != "tv" {
+		t.Fatalf("expected the restored show first in the wishlist: %+v", items)
+	}
+	if items := readItems("/api/trash"); len(items) != 0 {
+		t.Fatalf("restored show is still in trash: %+v", items)
+	}
+
+	request(t, "DELETE", "/api/wishlist/tv/42", "", 204)
+	a.tmdb = tmdb{}
+	handler = a.handler()
+	request(t, "POST", "/api/wishlist", `{"id":42,"media_type":"tv"}`, 201)
+	if items := readItems("/api/trash"); len(items) != 0 {
+		t.Fatalf("re-added show is still in trash: %+v", items)
+	}
+	request(t, "DELETE", "/api/wishlist/tv/42", "", 204)
+	request(t, "DELETE", "/api/trash", "", 204)
+	request(t, "DELETE", "/api/trash", "", 204)
+
+	a.library, err = openLibrary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler = a.handler()
+	request(t, "POST", "/api/trash/tv/42/restore", "", 404)
+	if items := readItems("/api/trash"); len(items) != 0 {
+		t.Fatalf("trash still contains titles after emptying and reopening: %+v", items)
+	}
+	if items := readItems("/api/wishlist"); len(items) != 1 || items[0].Kind != "movie" {
+		t.Fatalf("emptying trash affected the saved film: %+v", items)
 	}
 }
