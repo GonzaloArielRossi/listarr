@@ -128,8 +128,11 @@ function poster(item, size) {
 function card(item) {
   const row = element("li", "card");
   const body = element("div", "card-body");
-  const details = element("div", "card-actions");
   const title = displayTitle(item);
+  const heading = element("h3", "", title);
+  const info = element("p", "metadata", metadata(item));
+  heading.title = title;
+  info.title = info.textContent;
   const badges = element("div", "card-badges");
   if (item.media_type === "movie") {
     row.dataset.movieId = item.id;
@@ -162,8 +165,7 @@ function card(item) {
       confirmAction("Move to Trash?", "“" + title + "” will move to Trash.", "Move to Trash", () => removeTitle(item, action));
     }
   });
-  details.append(badges, action);
-  body.append(element("h3", "", title), element("p", "metadata", metadata(item)), details);
+  body.append(heading, info, badges, action);
   row.append(poster(item, "w342"), body);
   return row;
 }
