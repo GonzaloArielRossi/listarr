@@ -132,6 +132,12 @@ h1 { font-size: clamp(3.05rem, 8vw, 5.25rem); font-weight: 730; letter-spacing: 
   border: 1px solid #fff3; border-radius: 50%; background: #141516ed; color: var(--ink);
   font-size: 1.35rem; line-height: 1;
 }
+.card-action.remove::before, .card-action.remove::after {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: .85rem; height: .125rem; border-radius: 1px; background: currentColor;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.card-action.remove::after { transform: translate(-50%, -50%) rotate(-45deg); }
 .card-action:hover:enabled { background: var(--raised); color: var(--accent); }
 .card-action.remove:hover:enabled { background: #3d2824; color: var(--error); }
 

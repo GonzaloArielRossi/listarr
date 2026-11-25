@@ -150,7 +150,7 @@ function card(item) {
   }
 
   const label = viewingTrash ? "Restore" : "Remove";
-  const action = element("button", viewingTrash ? "card-action" : "card-action remove", viewingTrash ? "↶" : "×");
+  const action = element("button", viewingTrash ? "card-action" : "card-action remove", viewingTrash ? "↶" : "");
   action.type = "button";
   action.dataset.key = keyFor(item);
   action.title = label;
