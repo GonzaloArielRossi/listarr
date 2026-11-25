@@ -127,36 +127,33 @@ function poster(item, size) {
 
 function card(item) {
   const row = element("li", "card");
+  const cover = element("div", "card-cover");
   const body = element("div", "card-body");
   const title = displayTitle(item);
   const heading = element("h3", "", title);
   const info = element("p", "metadata", metadata(item));
   heading.title = title;
   info.title = info.textContent;
-  const badges = element("div", "card-badges");
+  const status = element("span", "badge card-status");
   if (item.media_type === "movie") {
     row.dataset.movieId = item.id;
     availabilityObserver.observe(row);
     const today = new Date().toISOString().slice(0, 10);
     const upcoming = /^\d{4}-\d{2}-\d{2}$/.test(item.release_date) && item.release_date > today;
-    const label = upcoming ? "Upcoming" : item.status;
-    if (label && label !== "Released") {
-      badges.append(element("span", "badge", label));
-    } else {
-      badges.append(element("span", "badge muted release-check", "Checking…"));
-    }
+    status.textContent = upcoming ? "Upcoming" : "";
+    status.hidden = !upcoming;
   } else {
-    const status = element("span", "badge", item.status || "Status unknown");
+    status.textContent = item.status || "Status unknown";
     if (["Released", "Ended", "Returning Series"].includes(item.status)) {
       status.classList.add("released");
     }
-    badges.append(status);
   }
 
   const label = viewingTrash ? "Restore" : "Remove";
-  const action = element("button", viewingTrash ? "card-action" : "card-action remove", label);
+  const action = element("button", viewingTrash ? "card-action" : "card-action remove", viewingTrash ? "↶" : "×");
   action.type = "button";
   action.dataset.key = keyFor(item);
+  action.title = label;
   action.setAttribute("aria-label", label + " " + title);
   action.addEventListener("click", () => {
     if (viewingTrash) {
@@ -165,15 +162,15 @@ function card(item) {
       confirmAction("Move to Trash?", "“" + title + "” will move to Trash.", "Move to Trash", () => removeTitle(item, action));
     }
   });
-  body.append(heading, info, badges, action);
-  row.append(poster(item, "w342"), body);
+  cover.append(poster(item, "w342"), status, action);
+  body.append(heading, info);
+  row.append(body, cover);
   return row;
 }
 
 async function showAvailability(row) {
   const id = row.dataset.movieId;
-  const badges = row.querySelector(".card-badges");
-  const checking = badges.querySelector(".release-check");
+  const status = row.querySelector(".card-status");
   if (!availabilityRequests.has(id)) {
     const request = api("/api/wishlist/movie/" + id + "/availability")
       .finally(() => availabilityRequests.delete(id));
@@ -181,32 +178,20 @@ async function showAvailability(row) {
   }
   try {
     const { theatrical, theatrical_region, upcoming, streaming, region } = await availabilityRequests.get(id);
-    if (!theatrical && !streaming) {
-      if (upcoming) {
-        badges.replaceChildren(element("span", "badge", "Upcoming"));
-      } else if (checking) {
-        checking.textContent = "Unverified";
-        checking.title = "TMDB has no confirmed theatrical release or streaming listing for " + regionNames.of(region) + ".";
-      }
-      return;
-    }
-    const releaseBadges = [];
-    if (theatrical) {
-      const badge = element("span", "badge theatrical", "Released in MT");
-      badge.title = "Theatrical release in " + regionNames.of(theatrical_region || region);
-      releaseBadges.push(badge);
-    }
     if (streaming) {
-      const badge = element("span", "badge released", "Released");
-      badge.title = "Available to stream in " + regionNames.of(region);
-      releaseBadges.push(badge);
+      status.textContent = "Released";
+      status.classList.add("released");
+      status.title = "Available to stream in " + regionNames.of(region);
+    } else if (theatrical) {
+      status.textContent = "Released in Theaters";
+      status.classList.add("theatrical");
+      status.title = "Theatrical release in " + regionNames.of(theatrical_region || region);
+    } else if (upcoming) {
+      status.textContent = "Upcoming";
     }
-    badges.replaceChildren(...releaseBadges);
+    status.hidden = !status.textContent;
   } catch {
-    if (checking) {
-      checking.textContent = "Check failed";
-      checking.title = "Release information could not be loaded. Refresh to retry.";
-    }
+    // Keep any upcoming date from the saved title if availability cannot be loaded.
   }
 }
 
