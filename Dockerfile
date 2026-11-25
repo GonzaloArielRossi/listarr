@@ -3,9 +3,11 @@ ARG GO_IMAGE=golang:1.26.11-alpine
 
 FROM ${GO_IMAGE} AS live
 RUN apk add --no-cache ca-certificates su-exec \
-    && CGO_ENABLED=0 GOBIN=/usr/local/bin go install github.com/air-verse/air@v1.67.4
+    && CGO_ENABLED=0 GOBIN=/usr/local/bin go install github.com/air-verse/air@v1.67.4 \
+    && install -d -m 0755 /etc/listarr
 COPY docker/entrypoint.sh /usr/local/bin/listarr-entrypoint
-COPY docker/air.toml /etc/listarr/air.toml
+COPY --chmod=0644 docker/air.toml /etc/listarr/air.toml
+RUN su-exec 1000:1000 /bin/sh -c 'test -r /etc/listarr/air.toml'
 WORKDIR /src
 ENV LISTEN_ADDR=0.0.0.0:8080 DATA_DIR=/data \
     GOCACHE=/tmp/listarr-go-cache GOPATH=/tmp/listarr-go CGO_ENABLED=0
