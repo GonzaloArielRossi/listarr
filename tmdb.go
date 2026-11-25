@@ -1,0 +1,207 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+const maxTMDBID = 2147483647
+
+var (
+	imdbPattern     = regexp.MustCompile(`^tt[0-9]+$`)
+	tmdbPattern     = regexp.MustCompile(`^[0-9]+$`)
+	errNoCredential = errors.New("missing TMDB credential")
+	errBadLookup    = errors.New("invalid lookup query")
+)
+
+type tmdb struct {
+	base   string
+	apiKey string
+	client *http.Client
+}
+
+type remoteTitle struct {
+	ID               int    `json:"id"`
+	Kind             string `json:"media_type"`
+	Title            string `json:"title"`
+	Name             string `json:"name"`
+	OriginalTitle    string `json:"original_title"`
+	OriginalName     string `json:"original_name"`
+	ReleaseDate      string `json:"release_date"`
+	FirstAirDate     string `json:"first_air_date"`
+	Status           string `json:"status"`
+	OriginalLanguage string `json:"original_language"`
+	PosterPath       string `json:"poster_path"`
+	IMDbID           string `json:"imdb_id"`
+	ExternalIDs      struct {
+		IMDbID string `json:"imdb_id"`
+	} `json:"external_ids"`
+}
+
+func (remote remoteTitle) toTitle(kind string) title {
+	item := title{
+		ID: remote.ID, Kind: kind, Name: remote.Title, OriginalName: remote.OriginalTitle,
+		Date: remote.ReleaseDate, Status: remote.Status, OriginalLanguage: remote.OriginalLanguage,
+		PosterPath: remote.PosterPath, IMDbID: remote.IMDbID,
+	}
+	if kind == "tv" {
+		item.Name = remote.Name
+		item.OriginalName = remote.OriginalName
+		item.Date = remote.FirstAirDate
+		item.IMDbID = remote.ExternalIDs.IMDbID
+	}
+	if item.Name == "" {
+		item.Name = item.OriginalName
+	}
+	return item
+}
+
+type searchResult struct {
+	Titles     []title `json:"titles"`
+	Page       int     `json:"page"`
+	TotalPages int     `json:"total_pages"`
+}
+
+type upstreamStatus int
+
+func (code upstreamStatus) Error() string {
+	return fmt.Sprintf("TMDB returned HTTP %d", code)
+}
+
+func (t tmdb) fetch(ctx context.Context, path string, query url.Values, result any) error {
+	if t.apiKey == "" {
+		return errNoCredential
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, t.base+path, nil)
+	if err != nil {
+		return err
+	}
+	parameters := request.URL.Query()
+	for name, values := range query {
+		parameters[name] = values
+	}
+	parameters.Set("language", "en-US")
+	parameters.Set("api_key", t.apiKey)
+	request.URL.RawQuery = parameters.Encode()
+	request.Header.Set("Accept", "application/json")
+	response, err := t.client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return upstreamStatus(response.StatusCode)
+	}
+	return json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(result)
+}
+
+func (t tmdb) details(ctx context.Context, kind string, id int) (title, error) {
+	path := "/movie/"
+	query := url.Values{}
+	if kind == "tv" {
+		path = "/tv/"
+		query.Set("append_to_response", "external_ids")
+	}
+	var remote remoteTitle
+	err := t.fetch(ctx, path+strconv.Itoa(id), query, &remote)
+	if err == nil && remote.ID != id {
+		err = errors.New("TMDB returned an unexpected title ID")
+	}
+	return remote.toTitle(kind), err
+}
+
+func (t tmdb) search(ctx context.Context, query string, page int) (searchResult, error) {
+	result := searchResult{Titles: []title{}, Page: 1, TotalPages: 1}
+	lower := strings.ToLower(query)
+	switch {
+	case strings.HasPrefix(lower, "title:"):
+		query = strings.TrimSpace(query[len("title:"):])
+		if query == "" {
+			return result, errBadLookup
+		}
+	case imdbPattern.MatchString(lower):
+		var matches struct {
+			Movies []remoteTitle `json:"movie_results"`
+			TV     []remoteTitle `json:"tv_results"`
+		}
+		err := t.fetch(ctx, "/find/"+lower, url.Values{"external_source": {"imdb_id"}}, &matches)
+		if errors.Is(err, upstreamStatus(http.StatusNotFound)) {
+			return result, nil
+		}
+		for _, item := range matches.Movies {
+			result.Titles = append(result.Titles, item.toTitle("movie"))
+		}
+		for _, item := range matches.TV {
+			result.Titles = append(result.Titles, item.toTitle("tv"))
+		}
+		return result, err
+	case tmdbPattern.MatchString(lower):
+		id, err := strconv.ParseInt(query, 10, 32)
+		if err != nil || id < 1 {
+			return result, errBadLookup
+		}
+		var lookups [2]struct {
+			item title
+			err  error
+		}
+		var pending sync.WaitGroup
+		for index, kind := range []string{"movie", "tv"} {
+			pending.Go(func() {
+				lookups[index].item, lookups[index].err = t.details(ctx, kind, int(id))
+			})
+		}
+		pending.Wait()
+		for _, lookup := range lookups {
+			if errors.Is(lookup.err, upstreamStatus(http.StatusNotFound)) {
+				continue
+			}
+			if lookup.err != nil {
+				return result, lookup.err
+			}
+			result.Titles = append(result.Titles, lookup.item)
+		}
+		return result, nil
+	}
+
+	var matches struct {
+		Results    []remoteTitle `json:"results"`
+		TotalPages int           `json:"total_pages"`
+	}
+	err := t.fetch(ctx, "/search/multi", url.Values{
+		"query": {query}, "page": {strconv.Itoa(page)}, "include_adult": {"false"},
+	}, &matches)
+	result.Page = page
+	result.TotalPages = min(matches.TotalPages, 500)
+	for _, item := range matches.Results {
+		if validKind(item.Kind) && item.ID > 0 {
+			result.Titles = append(result.Titles, item.toTitle(item.Kind))
+		}
+	}
+	return result, err
+}
+
+func writeTMDBError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errBadLookup):
+		writeError(w, http.StatusBadRequest, "Enter a valid title or TMDB ID.")
+	case errors.Is(err, errNoCredential):
+		writeError(w, http.StatusServiceUnavailable, "Set TMDB_API_KEY in your .env file and restart the app to use search.")
+	case errors.Is(err, upstreamStatus(http.StatusUnauthorized)), errors.Is(err, upstreamStatus(http.StatusForbidden)):
+		writeError(w, http.StatusBadGateway, "TMDB rejected the API key. Check TMDB_API_KEY and restart the app.")
+	case errors.Is(err, upstreamStatus(http.StatusNotFound)):
+		writeError(w, http.StatusNotFound, "TMDB could not find that title.")
+	case errors.Is(err, upstreamStatus(http.StatusTooManyRequests)):
+		writeError(w, http.StatusTooManyRequests, "TMDB is receiving too many requests. Try again in a moment.")
+	default:
+		writeError(w, http.StatusBadGateway, "TMDB is temporarily unavailable. Try again in a moment.")
+	}
+}
