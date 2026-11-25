@@ -21,6 +21,15 @@ const next = byId("next-page");
 const languageNames = new Intl.DisplayNames(["en"], { type: "language" });
 const originalTitleLanguages = new Set(["en", "es", "it", "fr"]);
 const pendingAdds = new Set();
+const availabilityRequests = new Map();
+const availabilityObserver = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (entry.isIntersecting && entry.target.isConnected) {
+      availabilityObserver.unobserve(entry.target);
+      showAvailability(entry.target);
+    }
+  }
+}, { rootMargin: "200px" });
 let saved = [];
 let trashed = [];
 let viewingTrash = false;
@@ -120,9 +129,17 @@ function card(item) {
   const body = element("div", "card-body");
   const details = element("div", "card-actions");
   const title = displayTitle(item);
-  const status = element("span", "badge", item.status || "Status unknown");
-  if (["Released", "Ended", "Returning Series"].includes(item.status)) {
-    status.classList.add("released");
+  const badges = element("div", "card-badges");
+  if (item.media_type === "movie") {
+    row.dataset.movieId = item.id;
+    availabilityObserver.observe(row);
+  }
+  if (item.media_type !== "movie" || item.status !== "Released") {
+    const status = element("span", "badge", item.status || "Status unknown");
+    if (["Released", "Ended", "Returning Series"].includes(item.status)) {
+      status.classList.add("released");
+    }
+    badges.append(status);
   }
 
   const label = viewingTrash ? "Restore" : "Remove";
@@ -137,10 +154,37 @@ function card(item) {
       confirmAction("Move to Trash?", "“" + title + "” will move to Trash.", "Move to Trash", () => removeTitle(item, action));
     }
   });
-  details.append(status, action);
+  details.append(badges, action);
   body.append(element("h3", "", title), element("p", "metadata", metadata(item)), details);
   row.append(poster(item, "w342"), body);
   return row;
+}
+
+async function showAvailability(row) {
+  const id = row.dataset.movieId;
+  if (!availabilityRequests.has(id)) {
+    const request = api("/api/wishlist/movie/" + id + "/availability")
+      .finally(() => availabilityRequests.delete(id));
+    availabilityRequests.set(id, request);
+  }
+  try {
+    const { theatrical, streaming, region } = await availabilityRequests.get(id);
+    if (!theatrical && !streaming) return;
+    const releaseBadges = [];
+    if (theatrical) {
+      const badge = element("span", "badge theatrical", "Released in MT");
+      badge.title = "Theatrical release in " + region;
+      releaseBadges.push(badge);
+    }
+    if (streaming) {
+      const badge = element("span", "badge released", "Released");
+      badge.title = "Available to stream in " + region;
+      releaseBadges.push(badge);
+    }
+    row.querySelector(".card-badges").replaceChildren(...releaseBadges);
+  } catch {
+    // Keep the rest of the card usable if availability cannot be loaded.
+  }
 }
 
 function renderList() {
@@ -152,6 +196,7 @@ function renderList() {
     (!language || languageKey(item) === language) &&
     (!query || [item.title, item.original_title, item.id, item.imdb_id].some((text) => normalize(text).includes(query)))
   ));
+  availabilityObserver.disconnect();
   cards.replaceChildren(...items.map(card));
   updateListActions();
 
@@ -266,7 +311,7 @@ function updateResultButtons() {
   }
 }
 
-async function addTitle(item) {
+async function addTitle(item, button) {
   const key = keyFor(item);
   if (isSaved(item) || pendingAdds.has(key) || changingList) return;
   pendingAdds.add(key);
@@ -284,7 +329,17 @@ async function addTitle(item) {
     displayNotice(listError);
     updateLanguages();
     renderList();
-    (lookup.open ? lookupStatus : byId("feedback")).textContent = "Added " + displayTitle(added) + ".";
+    const message = "Added " + displayTitle(added) + ".";
+    if (lookupResults.contains(button)) {
+      if (lookupQuery.value.trim() === completedQuery) {
+        lookupQuery.value = "";
+        lookupResults.replaceChildren();
+        byId("pages").hidden = true;
+        if (lookup.open) lookupQuery.focus();
+      }
+      lookupStatus.textContent = message;
+    }
+    if (!lookup.open) byId("feedback").textContent = message;
   } catch (error) {
     displayNotice(lookup.open ? lookupError : listError, error.message);
   } finally {
@@ -302,7 +357,7 @@ function resultRow(item) {
   button.type = "button";
   button.dataset.key = keyFor(item);
   button.dataset.title = title;
-  button.addEventListener("click", () => addTitle(item));
+  button.addEventListener("click", () => addTitle(item, button));
   body.append(element("strong", "", title), element("p", "metadata", metadata(item)));
   row.append(poster(item, "w92"), body, button);
   return row;

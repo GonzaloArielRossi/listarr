@@ -171,6 +171,7 @@ func (list *library) save(next []storedTitle) error {
 type app struct {
 	library *library
 	tmdb    tmdb
+	region  string
 }
 
 func (a app) handler() http.Handler {
@@ -181,6 +182,7 @@ func (a app) handler() http.Handler {
 		writeJSON(w, http.StatusOK, a.library.snapshot())
 	})
 	mux.HandleFunc("GET /api/search", a.search)
+	mux.HandleFunc("GET /api/wishlist/movie/{id}/availability", a.movieAvailability)
 	mux.HandleFunc("POST /api/wishlist", a.add)
 	mux.HandleFunc("DELETE /api/wishlist/{kind}/{id}", a.moveTitle(true))
 	mux.HandleFunc("GET /api/trash", func(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +207,25 @@ func (a app) handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (a app) movieAvailability(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id < 1 || id > maxTMDBID {
+		writeError(w, http.StatusBadRequest, "Select a valid film.")
+		return
+	}
+	if _, found := a.library.find("movie", id); !found {
+		writeError(w, http.StatusNotFound, "This film is no longer in the library.")
+		return
+	}
+	availability, err := a.tmdb.availability(r.Context(), id, a.region)
+	if err != nil {
+		writeTMDBError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	writeJSON(w, http.StatusOK, availability)
 }
 
 func (a app) search(w http.ResponseWriter, r *http.Request) {
@@ -323,12 +344,17 @@ func env(key, fallback string) string {
 }
 
 func main() {
+	region := strings.ToUpper(strings.TrimSpace(env("TMDB_REGION", "AR")))
+	if len(region) != 2 || region[0] < 'A' || region[0] > 'Z' || region[1] < 'A' || region[1] > 'Z' {
+		log.Fatal("TMDB_REGION must be a two-letter country code.")
+	}
 	list, err := openLibrary(filepath.Join(env("DATA_DIR", "data"), "wishlist.json"))
 	if err != nil {
 		log.Fatalf("open wishlist: %v", err)
 	}
 	a := app{
 		library: list,
+		region:  region,
 		tmdb: tmdb{
 			base:   "https://api.themoviedb.org/3",
 			apiKey: strings.TrimSpace(os.Getenv("TMDB_API_KEY")),

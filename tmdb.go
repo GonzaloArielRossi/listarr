@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const maxTMDBID = 2147483647
@@ -117,6 +118,61 @@ func (t tmdb) details(ctx context.Context, kind string, id int) (title, error) {
 		err = errors.New("TMDB returned an unexpected title ID")
 	}
 	return remote.toTitle(kind), err
+}
+
+type movieAvailability struct {
+	Region     string `json:"region"`
+	Theatrical bool   `json:"theatrical"`
+	Streaming  bool   `json:"streaming"`
+}
+
+func (t tmdb) availability(ctx context.Context, id int, region string) (movieAvailability, error) {
+	var releases struct {
+		Results []struct {
+			Region string `json:"iso_3166_1"`
+			Dates  []struct {
+				Type int       `json:"type"`
+				Date time.Time `json:"release_date"`
+			} `json:"release_dates"`
+		} `json:"results"`
+	}
+	var providers struct {
+		Results map[string]struct {
+			Subscription []json.RawMessage `json:"flatrate"`
+			Free         []json.RawMessage `json:"free"`
+			Ads          []json.RawMessage `json:"ads"`
+		} `json:"results"`
+	}
+	path := "/movie/" + strconv.Itoa(id)
+	var releaseErr, providerErr error
+	var pending sync.WaitGroup
+	pending.Go(func() { releaseErr = t.fetch(ctx, path+"/release_dates", nil, &releases) })
+	pending.Go(func() { providerErr = t.fetch(ctx, path+"/watch/providers", nil, &providers) })
+	pending.Wait()
+
+	result := movieAvailability{Region: region}
+	if releaseErr == nil {
+		today := time.Now().UTC().Format(time.DateOnly)
+		for _, release := range releases.Results {
+			if release.Region != region {
+				continue
+			}
+			for _, date := range release.Dates {
+				if (date.Type == 2 || date.Type == 3) && !date.Date.IsZero() && date.Date.Format(time.DateOnly) <= today {
+					result.Theatrical = true
+					break
+				}
+			}
+		}
+	}
+	if providerErr == nil {
+		offers := providers.Results[region]
+		result.Streaming = len(offers.Subscription)+len(offers.Free)+len(offers.Ads) > 0
+	}
+	if releaseErr != nil && providerErr != nil {
+		return result, providerErr
+	}
+	return result, nil
 }
 
 func (t tmdb) search(ctx context.Context, query string, page int) (searchResult, error) {

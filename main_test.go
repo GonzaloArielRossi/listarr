@@ -44,6 +44,18 @@ func fakeTMDB(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"tv_results":[` + show + `]}`))
 	case "/movie/42":
 		_, _ = w.Write([]byte(movie))
+	case "/movie/42/release_dates":
+		_, _ = w.Write([]byte(`{"results":[
+			{"iso_3166_1":"AR","release_dates":[{"type":3,"release_date":"2024-08-02T00:00:00.000Z"}]},
+			{"iso_3166_1":"GB","release_dates":[{"type":2,"release_date":"2024-08-05T00:00:00.000Z"}]},
+			{"iso_3166_1":"CA","release_dates":[{"type":3,"release_date":"2099-01-01T00:00:00.000Z"},{"type":4,"release_date":"2024-08-02T00:00:00.000Z"}]}
+		]}`))
+	case "/movie/42/watch/providers":
+		_, _ = w.Write([]byte(`{"results":{
+			"AR":{"flatrate":[{"provider_id":1}]},
+			"CA":{"rent":[{"provider_id":2}],"buy":[{"provider_id":3}]},
+			"US":{"ads":[{"provider_id":4}]}
+		}}`))
 	case "/tv/42":
 		if r.URL.Query().Get("append_to_response") != "external_ids" {
 			w.WriteHeader(http.StatusBadRequest)
@@ -52,6 +64,37 @@ func fakeTMDB(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(show))
 	default:
 		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func TestMovieAvailability(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wishlist.json")
+	list, err := openLibrary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := list.add(title{ID: 42, Kind: "movie", Name: "Summer Signal", Status: "Released"}); err != nil {
+		t.Fatal(err)
+	}
+	a := app{library: list, tmdb: tmdb{base: "https://tmdb.test", apiKey: "test-key", client: &http.Client{Transport: fakeTMDBTransport{}}}}
+	for _, want := range []movieAvailability{
+		{Region: "AR", Theatrical: true, Streaming: true},
+		{Region: "GB", Theatrical: true},
+		{Region: "CA"},
+		{Region: "US", Streaming: true},
+	} {
+		t.Run(want.Region, func(t *testing.T) {
+			a.region = want.Region
+			response := httptest.NewRecorder()
+			a.handler().ServeHTTP(response, httptest.NewRequest("GET", "/api/wishlist/movie/42/availability", nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("unexpected status %d: %s", response.Code, response.Body)
+			}
+			var got movieAvailability
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil || got != want {
+				t.Fatalf("got %+v, want %+v (error: %v)", got, want, err)
+			}
+		})
 	}
 }
 
