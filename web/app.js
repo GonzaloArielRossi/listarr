@@ -19,6 +19,7 @@ const previous = byId("previous-page");
 const next = byId("next-page");
 
 const languageNames = new Intl.DisplayNames(["en"], { type: "language" });
+const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
 const originalTitleLanguages = new Set(["en", "es", "it", "fr"]);
 const pendingAdds = new Set();
 const availabilityRequests = new Map();
@@ -133,8 +134,11 @@ function card(item) {
   if (item.media_type === "movie") {
     row.dataset.movieId = item.id;
     availabilityObserver.observe(row);
-  }
-  if (item.media_type !== "movie" || item.status !== "Released") {
+    const today = new Date().toISOString().slice(0, 10);
+    const upcoming = /^\d{4}-\d{2}-\d{2}$/.test(item.release_date) && item.release_date > today;
+    const label = upcoming ? "Upcoming" : item.status === "Released" ? "Release type unknown" : item.status || "Status unknown";
+    badges.append(element("span", "badge", label));
+  } else {
     const status = element("span", "badge", item.status || "Status unknown");
     if (["Released", "Ended", "Returning Series"].includes(item.status)) {
       status.classList.add("released");
@@ -168,20 +172,24 @@ async function showAvailability(row) {
     availabilityRequests.set(id, request);
   }
   try {
-    const { theatrical, streaming, region } = await availabilityRequests.get(id);
-    if (!theatrical && !streaming) return;
+    const { theatrical, theatrical_region, upcoming, streaming, region } = await availabilityRequests.get(id);
+    const badges = row.querySelector(".card-badges");
+    if (!theatrical && !streaming) {
+      if (upcoming) badges.replaceChildren(element("span", "badge", "Upcoming"));
+      return;
+    }
     const releaseBadges = [];
     if (theatrical) {
       const badge = element("span", "badge theatrical", "Released in MT");
-      badge.title = "Theatrical release in " + region;
+      badge.title = "Theatrical release in " + regionNames.of(theatrical_region || region);
       releaseBadges.push(badge);
     }
     if (streaming) {
       const badge = element("span", "badge released", "Released");
-      badge.title = "Available to stream in " + region;
+      badge.title = "Available to stream in " + regionNames.of(region);
       releaseBadges.push(badge);
     }
-    row.querySelector(".card-badges").replaceChildren(...releaseBadges);
+    badges.replaceChildren(...releaseBadges);
   } catch {
     // Keep the rest of the card usable if availability cannot be loaded.
   }

@@ -121,9 +121,11 @@ func (t tmdb) details(ctx context.Context, kind string, id int) (title, error) {
 }
 
 type movieAvailability struct {
-	Region     string `json:"region"`
-	Theatrical bool   `json:"theatrical"`
-	Streaming  bool   `json:"streaming"`
+	Region           string `json:"region"`
+	Theatrical       bool   `json:"theatrical"`
+	TheatricalRegion string `json:"theatrical_region,omitempty"`
+	Upcoming         bool   `json:"upcoming"`
+	Streaming        bool   `json:"streaming"`
 }
 
 func (t tmdb) availability(ctx context.Context, id int, region string) (movieAvailability, error) {
@@ -131,8 +133,8 @@ func (t tmdb) availability(ctx context.Context, id int, region string) (movieAva
 		Results []struct {
 			Region string `json:"iso_3166_1"`
 			Dates  []struct {
-				Type int       `json:"type"`
-				Date time.Time `json:"release_date"`
+				Type int    `json:"type"`
+				Date string `json:"release_date"`
 			} `json:"release_dates"`
 		} `json:"results"`
 	}
@@ -154,16 +156,29 @@ func (t tmdb) availability(ctx context.Context, id int, region string) (movieAva
 	if releaseErr == nil {
 		today := time.Now().UTC().Format(time.DateOnly)
 		for _, release := range releases.Results {
-			if release.Region != region {
+			if release.Region == "" {
 				continue
 			}
 			for _, date := range release.Dates {
-				if (date.Type == 2 || date.Type == 3) && !date.Date.IsZero() && date.Date.Format(time.DateOnly) <= today {
-					result.Theatrical = true
-					break
+				if date.Type != 2 && date.Type != 3 {
+					continue
 				}
+				day, _, _ := strings.Cut(date.Date, "T")
+				if _, err := time.Parse(time.DateOnly, day); err != nil {
+					continue
+				}
+				if day > today {
+					result.Upcoming = true
+					continue
+				}
+				if result.TheatricalRegion == "" || release.Region == region {
+					result.TheatricalRegion = release.Region
+				}
+				break
 			}
 		}
+		result.Theatrical = result.TheatricalRegion != ""
+		result.Upcoming = result.Upcoming && !result.Theatrical
 	}
 	if providerErr == nil {
 		offers := providers.Results[region]

@@ -56,6 +56,16 @@ func fakeTMDB(w http.ResponseWriter, r *http.Request) {
 			"CA":{"rent":[{"provider_id":2}],"buy":[{"provider_id":3}]},
 			"US":{"ads":[{"provider_id":4}]}
 		}}`))
+	case "/movie/43/release_dates":
+		_, _ = w.Write([]byte(`{"results":[
+			{"iso_3166_1":"ES","release_dates":[{"type":3,"release_date":"2099-01-01T00:00:00.000Z"}]}
+		]}`))
+	case "/movie/44/release_dates":
+		_, _ = w.Write([]byte(`{"results":[
+			{"iso_3166_1":"ES","release_dates":[{"type":1,"release_date":"2024-08-02T00:00:00.000Z"},{"type":4,"release_date":"2024-08-02T00:00:00.000Z"}]}
+		]}`))
+	case "/movie/43/watch/providers", "/movie/44/watch/providers":
+		_, _ = w.Write([]byte(`{"results":{"AR":{"rent":[{"provider_id":2}]}}}`))
 	case "/tv/42":
 		if r.URL.Query().Get("append_to_response") != "external_ids" {
 			w.WriteHeader(http.StatusBadRequest)
@@ -73,20 +83,29 @@ func TestMovieAvailability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := list.add(title{ID: 42, Kind: "movie", Name: "Summer Signal", Status: "Released"}); err != nil {
-		t.Fatal(err)
+	for _, id := range []int{42, 43, 44} {
+		if _, _, err := list.add(title{ID: id, Kind: "movie", Name: "Summer Signal", Status: "Released"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	a := app{library: list, tmdb: tmdb{base: "https://tmdb.test", apiKey: "test-key", client: &http.Client{Transport: fakeTMDBTransport{}}}}
-	for _, want := range []movieAvailability{
-		{Region: "AR", Theatrical: true, Streaming: true},
-		{Region: "GB", Theatrical: true},
-		{Region: "CA"},
-		{Region: "US", Streaming: true},
+	for _, test := range []struct {
+		name string
+		id   string
+		want movieAvailability
+	}{
+		{"local release and streaming", "42", movieAvailability{Region: "AR", Theatrical: true, TheatricalRegion: "AR", Streaming: true}},
+		{"prefer local limited release", "42", movieAvailability{Region: "GB", Theatrical: true, TheatricalRegion: "GB"}},
+		{"theatrical release abroad and local rentals", "42", movieAvailability{Region: "CA", Theatrical: true, TheatricalRegion: "AR"}},
+		{"theatrical release abroad and local free streaming", "42", movieAvailability{Region: "US", Theatrical: true, TheatricalRegion: "AR", Streaming: true}},
+		{"upcoming theatrical release", "43", movieAvailability{Region: "AR", Upcoming: true}},
+		{"premiere, digital release, and rental only", "44", movieAvailability{Region: "AR"}},
 	} {
-		t.Run(want.Region, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
+			want := test.want
 			a.region = want.Region
 			response := httptest.NewRecorder()
-			a.handler().ServeHTTP(response, httptest.NewRequest("GET", "/api/wishlist/movie/42/availability", nil))
+			a.handler().ServeHTTP(response, httptest.NewRequest("GET", "/api/wishlist/movie/"+test.id+"/availability", nil))
 			if response.Code != http.StatusOK {
 				t.Fatalf("unexpected status %d: %s", response.Code, response.Body)
 			}
