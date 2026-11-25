@@ -136,8 +136,12 @@ function card(item) {
     availabilityObserver.observe(row);
     const today = new Date().toISOString().slice(0, 10);
     const upcoming = /^\d{4}-\d{2}-\d{2}$/.test(item.release_date) && item.release_date > today;
-    const label = upcoming ? "Upcoming" : item.status === "Released" ? "Release type unknown" : item.status || "Status unknown";
-    badges.append(element("span", "badge", label));
+    const label = upcoming ? "Upcoming" : item.status;
+    if (label && label !== "Released") {
+      badges.append(element("span", "badge", label));
+    } else {
+      badges.append(element("span", "badge muted release-check", "Checking…"));
+    }
   } else {
     const status = element("span", "badge", item.status || "Status unknown");
     if (["Released", "Ended", "Returning Series"].includes(item.status)) {
@@ -166,6 +170,8 @@ function card(item) {
 
 async function showAvailability(row) {
   const id = row.dataset.movieId;
+  const badges = row.querySelector(".card-badges");
+  const checking = badges.querySelector(".release-check");
   if (!availabilityRequests.has(id)) {
     const request = api("/api/wishlist/movie/" + id + "/availability")
       .finally(() => availabilityRequests.delete(id));
@@ -173,9 +179,13 @@ async function showAvailability(row) {
   }
   try {
     const { theatrical, theatrical_region, upcoming, streaming, region } = await availabilityRequests.get(id);
-    const badges = row.querySelector(".card-badges");
     if (!theatrical && !streaming) {
-      if (upcoming) badges.replaceChildren(element("span", "badge", "Upcoming"));
+      if (upcoming) {
+        badges.replaceChildren(element("span", "badge", "Upcoming"));
+      } else if (checking) {
+        checking.textContent = "Unverified";
+        checking.title = "TMDB has no confirmed theatrical release or streaming listing for " + regionNames.of(region) + ".";
+      }
       return;
     }
     const releaseBadges = [];
@@ -191,7 +201,10 @@ async function showAvailability(row) {
     }
     badges.replaceChildren(...releaseBadges);
   } catch {
-    // Keep the rest of the card usable if availability cannot be loaded.
+    if (checking) {
+      checking.textContent = "Check failed";
+      checking.title = "Release information could not be loaded. Refresh to retry.";
+    }
   }
 }
 
