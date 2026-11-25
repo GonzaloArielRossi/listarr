@@ -21,7 +21,7 @@ After setup, run `git pull` in the same checkout on the Docker host. The running
 ## Use the wishlist
 
 - **Add title** searches by name, numeric TMDB ID, or IMDb ID such as `tt0133093`. If a film and a TV show share a TMDB number, you can select either or both. For a title made entirely of digits, search with `title:`, for example `title:1917`.
-- Saved cards show the poster, title, year, original language, and TMDB status captured when you add the title. TV shows use their first-air year and series status.
+- Saved cards show the release year, IMDb ID, and TMDB ID beneath the poster, with country-of-origin flags on the poster. TV shows use their first-air year. Listarr fills in missing country and IMDb data for existing titles when you view their cards.
 - Film cards show one release tag. **Released** means the film is available to stream in the configured country. **Released in Theaters** indicates a recorded theatrical release in any country, and **Upcoming** indicates a future release. Rental and purchase listings do not qualify as streaming. Set `TMDB_REGION` in `.env` to change the streaming country from Argentina (`AR`), then run `docker compose up -d` to apply the setting.
 - Search results and saved cards use the original title for English, Spanish, Italian, and French productions. Other productions use the English title when TMDB has one.
 - Use **Films** or **Shows** to filter by type alongside title and original language. Select the active button again to show both types.

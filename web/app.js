@@ -22,12 +22,14 @@ const languageNames = new Intl.DisplayNames(["en"], { type: "language" });
 const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
 const originalTitleLanguages = new Set(["en", "es", "it", "fr"]);
 const pendingAdds = new Set();
-const availabilityRequests = new Map();
-const availabilityObserver = new IntersectionObserver((entries) => {
+const cardRequests = new Map();
+const cardObserver = new IntersectionObserver((entries) => {
   for (const entry of entries) {
     if (entry.isIntersecting && entry.target.isConnected) {
-      availabilityObserver.unobserve(entry.target);
-      showAvailability(entry.target);
+      const row = entry.target;
+      cardObserver.unobserve(row);
+      if (row.dataset.movieId) showAvailability(row);
+      if (row.dataset.metadataKey) loadCardMetadata(row);
     }
   }
 }, { rootMargin: "200px" });
@@ -103,10 +105,50 @@ function displayTitle(item) {
   return item.title || item.original_title;
 }
 
-function metadata(item) {
+function lookupMetadata(item) {
   const kind = item.media_type === "movie" ? "Film" : "TV show";
   const year = /^\d{4}/.exec(item.release_date)?.[0];
   return [kind, year || "Year unknown", languageName(item.original_language)].join(" · ");
+}
+
+function showCardMetadata(item, metadata, origin) {
+  const year = /^\d{4}/.exec(item.release_date)?.[0] || "Year unknown";
+  const countries = (item.origin_country || []).filter(code => /^[A-Z]{2}$/.test(code));
+  origin.hidden = !countries.length;
+  origin.textContent = countries.map(code => {
+    const indicators = Array.from(code, letter => 0x1F1E6 + letter.charCodeAt(0) - 65);
+    return String.fromCodePoint(...indicators);
+  }).join(" ");
+  origin.title = countries.map(code => regionNames.of(code)).join(", ");
+  origin.setAttribute("aria-label", "Country of origin: " + origin.title);
+  const fields = [year, "IMDb " + (item.imdb_id || "—"), "TMDB " + item.id];
+  metadata.replaceChildren(...fields.map(field => {
+    const line = element("p", "", field);
+    line.title = field;
+    return line;
+  }));
+}
+
+function loadCardData(path) {
+  if (!cardRequests.has(path)) {
+    cardRequests.set(path, api(path).finally(() => cardRequests.delete(path)));
+  }
+  return cardRequests.get(path);
+}
+
+async function loadCardMetadata(row) {
+  const key = row.dataset.metadataKey;
+  const item = (viewingTrash ? trashed : saved).find(item => keyFor(item) === key);
+  if (!item) return;
+  try {
+    const details = await loadCardData("/api/wishlist/" + key + "/metadata");
+    item.origin_country = details.origin_country;
+    item.imdb_id = details.imdb_id;
+    item.release_date = details.release_date;
+    showCardMetadata(item, row.querySelector(".card-metadata"), row.querySelector(".card-origin"));
+  } catch {
+    // Keep the fields already saved with the title.
+  }
 }
 
 function poster(item, size) {
@@ -131,23 +173,26 @@ function card(item) {
   const body = element("div", "card-body");
   const title = displayTitle(item);
   const heading = element("h3", "", title);
-  const info = element("p", "metadata", metadata(item));
+  const info = element("div", "card-metadata");
+  const origin = element("span", "card-origin");
+  origin.setAttribute("role", "img");
   heading.title = title;
-  info.title = info.textContent;
+  showCardMetadata(item, info, origin);
+  if (item.origin_country == null) row.dataset.metadataKey = keyFor(item);
   const status = element("span", "badge card-status");
   if (item.media_type === "movie") {
     row.dataset.movieId = item.id;
-    availabilityObserver.observe(row);
     const today = new Date().toISOString().slice(0, 10);
     const upcoming = /^\d{4}-\d{2}-\d{2}$/.test(item.release_date) && item.release_date > today;
     status.textContent = upcoming ? "Upcoming" : "";
     status.hidden = !upcoming;
   } else {
-    status.textContent = item.status || "Status unknown";
+    status.textContent = item.status === "Returning Series" ? "Returning" : item.status || "Status unknown";
     if (["Released", "Ended", "Returning Series"].includes(item.status)) {
       status.classList.add("released");
     }
   }
+  if (row.dataset.movieId || row.dataset.metadataKey) cardObserver.observe(row);
 
   const label = viewingTrash ? "Restore" : "Remove";
   const action = element("button", viewingTrash ? "card-action" : "card-action remove", viewingTrash ? "↶" : "");
@@ -162,8 +207,8 @@ function card(item) {
       confirmAction("Move to Trash?", "“" + title + "” will move to Trash.", "Move to Trash", () => removeTitle(item, action));
     }
   });
-  cover.append(poster(item, "w342"), status, action);
-  body.append(heading, info);
+  cover.append(poster(item, "w342"), origin, action);
+  body.append(heading, info, status);
   row.append(body, cover);
   return row;
 }
@@ -171,13 +216,9 @@ function card(item) {
 async function showAvailability(row) {
   const id = row.dataset.movieId;
   const status = row.querySelector(".card-status");
-  if (!availabilityRequests.has(id)) {
-    const request = api("/api/wishlist/movie/" + id + "/availability")
-      .finally(() => availabilityRequests.delete(id));
-    availabilityRequests.set(id, request);
-  }
   try {
-    const { theatrical, theatrical_region, upcoming, streaming, region } = await availabilityRequests.get(id);
+    const { theatrical, theatrical_region, upcoming, streaming, region } =
+      await loadCardData("/api/wishlist/movie/" + id + "/availability");
     if (streaming) {
       status.textContent = "Released";
       status.classList.add("released");
@@ -204,7 +245,7 @@ function renderList() {
     (!language || languageKey(item) === language) &&
     (!query || [item.title, item.original_title, item.id, item.imdb_id].some((text) => normalize(text).includes(query)))
   ));
-  availabilityObserver.disconnect();
+  cardObserver.disconnect();
   cards.replaceChildren(...items.map(card));
   updateListActions();
 
@@ -366,7 +407,7 @@ function resultRow(item) {
   button.dataset.key = keyFor(item);
   button.dataset.title = title;
   button.addEventListener("click", () => addTitle(item, button));
-  body.append(element("strong", "", title), element("p", "metadata", metadata(item)));
+  body.append(element("strong", "", title), element("p", "metadata", lookupMetadata(item)));
   row.append(poster(item, "w92"), body, button);
   return row;
 }

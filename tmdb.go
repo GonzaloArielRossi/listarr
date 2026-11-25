@@ -31,19 +31,23 @@ type tmdb struct {
 }
 
 type remoteTitle struct {
-	ID               int    `json:"id"`
-	Kind             string `json:"media_type"`
-	Title            string `json:"title"`
-	Name             string `json:"name"`
-	OriginalTitle    string `json:"original_title"`
-	OriginalName     string `json:"original_name"`
-	ReleaseDate      string `json:"release_date"`
-	FirstAirDate     string `json:"first_air_date"`
-	Status           string `json:"status"`
-	OriginalLanguage string `json:"original_language"`
-	PosterPath       string `json:"poster_path"`
-	IMDbID           string `json:"imdb_id"`
-	ExternalIDs      struct {
+	ID                  int      `json:"id"`
+	Kind                string   `json:"media_type"`
+	Title               string   `json:"title"`
+	Name                string   `json:"name"`
+	OriginalTitle       string   `json:"original_title"`
+	OriginalName        string   `json:"original_name"`
+	ReleaseDate         string   `json:"release_date"`
+	FirstAirDate        string   `json:"first_air_date"`
+	Status              string   `json:"status"`
+	OriginalLanguage    string   `json:"original_language"`
+	PosterPath          string   `json:"poster_path"`
+	IMDbID              string   `json:"imdb_id"`
+	OriginCountries     []string `json:"origin_country"`
+	ProductionCountries []struct {
+		Code string `json:"iso_3166_1"`
+	} `json:"production_countries"`
+	ExternalIDs struct {
 		IMDbID string `json:"imdb_id"`
 	} `json:"external_ids"`
 }
@@ -53,6 +57,12 @@ func (remote remoteTitle) toTitle(kind string) title {
 		ID: remote.ID, Kind: kind, Name: remote.Title, OriginalName: remote.OriginalTitle,
 		Date: remote.ReleaseDate, Status: remote.Status, OriginalLanguage: remote.OriginalLanguage,
 		PosterPath: remote.PosterPath, IMDbID: remote.IMDbID,
+		OriginCountries: remote.OriginCountries,
+	}
+	if len(item.OriginCountries) == 0 {
+		for _, country := range remote.ProductionCountries {
+			item.OriginCountries = append(item.OriginCountries, country.Code)
+		}
 	}
 	if kind == "tv" {
 		item.Name = remote.Name
@@ -117,7 +127,11 @@ func (t tmdb) details(ctx context.Context, kind string, id int) (title, error) {
 	if err == nil && remote.ID != id {
 		err = errors.New("TMDB returned an unexpected title ID")
 	}
-	return remote.toTitle(kind), err
+	item := remote.toTitle(kind)
+	if item.OriginCountries == nil {
+		item.OriginCountries = []string{}
+	}
+	return item, err
 }
 
 type movieAvailability struct {

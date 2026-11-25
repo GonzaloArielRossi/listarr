@@ -25,15 +25,16 @@ import (
 var assets embed.FS
 
 type title struct {
-	ID               int    `json:"id"`
-	Kind             string `json:"media_type"`
-	Name             string `json:"title"`
-	OriginalName     string `json:"original_title"`
-	Date             string `json:"release_date"`
-	Status           string `json:"status"`
-	OriginalLanguage string `json:"original_language"`
-	PosterPath       string `json:"poster_path"`
-	IMDbID           string `json:"imdb_id,omitempty"`
+	ID               int      `json:"id"`
+	Kind             string   `json:"media_type"`
+	Name             string   `json:"title"`
+	OriginalName     string   `json:"original_title"`
+	Date             string   `json:"release_date"`
+	Status           string   `json:"status"`
+	OriginalLanguage string   `json:"original_language"`
+	PosterPath       string   `json:"poster_path"`
+	IMDbID           string   `json:"imdb_id,omitempty"`
+	OriginCountries  []string `json:"origin_country"`
 }
 
 func validKind(kind string) bool {
@@ -91,6 +92,30 @@ func (list *library) find(kind string, id int) (storedTitle, bool) {
 		}
 	}
 	return storedTitle{}, false
+}
+
+func (list *library) fillMetadata(details title) (title, bool, error) {
+	list.mu.Lock()
+	defer list.mu.Unlock()
+	for index, item := range list.titles {
+		if item.Kind != details.Kind || item.ID != details.ID {
+			continue
+		}
+		if item.OriginCountries != nil {
+			return item.title, true, nil
+		}
+		item.OriginCountries = details.OriginCountries
+		if item.IMDbID == "" {
+			item.IMDbID = details.IMDbID
+		}
+		if item.Date == "" {
+			item.Date = details.Date
+		}
+		next := slices.Clone(list.titles)
+		next[index] = item
+		return item.title, true, list.save(next)
+	}
+	return title{}, false, nil
 }
 
 func (list *library) add(item title) (title, bool, error) {
@@ -183,6 +208,7 @@ func (a app) handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/search", a.search)
 	mux.HandleFunc("GET /api/wishlist/movie/{id}/availability", a.movieAvailability)
+	mux.HandleFunc("GET /api/wishlist/{kind}/{id}/metadata", a.titleMetadata)
 	mux.HandleFunc("POST /api/wishlist", a.add)
 	mux.HandleFunc("DELETE /api/wishlist/{kind}/{id}", a.moveTitle(true))
 	mux.HandleFunc("GET /api/trash", func(w http.ResponseWriter, r *http.Request) {
@@ -207,6 +233,40 @@ func (a app) handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (a app) titleMetadata(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id < 1 || id > maxTMDBID || !validKind(kind) {
+		writeError(w, http.StatusBadRequest, "Select a valid title.")
+		return
+	}
+	item, found := a.library.find(kind, id)
+	if !found {
+		writeError(w, http.StatusNotFound, "This title is no longer in the library.")
+		return
+	}
+	if item.OriginCountries != nil {
+		writeJSON(w, http.StatusOK, item.title)
+		return
+	}
+	details, err := a.tmdb.details(r.Context(), kind, id)
+	if err != nil {
+		writeTMDBError(w, err)
+		return
+	}
+	updated, found, err := a.library.fillMetadata(details)
+	if err != nil {
+		log.Printf("save title metadata: %v", err)
+		writeError(w, http.StatusInternalServerError, "Could not save title metadata.")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "This title is no longer in the library.")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (a app) movieAvailability(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,8 +20,8 @@ func (fakeTMDBTransport) RoundTrip(request *http.Request) (*http.Response, error
 }
 
 func fakeTMDB(w http.ResponseWriter, r *http.Request) {
-	const movie = `{"id":42,"media_type":"movie","title":"Summer Signal","original_language":"en","release_date":"2024-08-02","poster_path":"/signal.jpg","status":"Released","imdb_id":"tt1000042"}`
-	const show = `{"id":42,"media_type":"tv","name":"Night Signal","original_name":"Signal de nuit","original_language":"fr","first_air_date":"2025-11-09","status":"Returning Series","external_ids":{"imdb_id":"tt2000042"}}`
+	const movie = `{"id":42,"media_type":"movie","title":"Summer Signal","original_language":"en","release_date":"2024-08-02","poster_path":"/signal.jpg","status":"Released","imdb_id":"tt1000042","origin_country":["CA","US"],"production_countries":[{"iso_3166_1":"MX"}]}`
+	const show = `{"id":42,"media_type":"tv","name":"Night Signal","original_name":"Signal de nuit","original_language":"fr","first_air_date":"2025-11-09","status":"Returning Series","external_ids":{"imdb_id":"tt2000042"},"origin_country":["FR"]}`
 	if r.URL.Query().Get("api_key") != "test-key" {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -44,6 +45,8 @@ func fakeTMDB(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"tv_results":[` + show + `]}`))
 	case "/movie/42":
 		_, _ = w.Write([]byte(movie))
+	case "/movie/45":
+		_, _ = w.Write([]byte(`{"id":45,"title":"Indigo","production_countries":[{"iso_3166_1":"ES"}]}`))
 	case "/movie/42/release_dates":
 		_, _ = w.Write([]byte(`{"results":[
 			{"iso_3166_1":"AR","release_dates":[{"type":3,"release_date":"2024-08-02T00:00:00.000Z"}]},
@@ -114,6 +117,50 @@ func TestMovieAvailability(t *testing.T) {
 				t.Fatalf("got %+v, want %+v (error: %v)", got, want, err)
 			}
 		})
+	}
+}
+
+func TestLegacyCardMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wishlist.json")
+	const legacy = `[
+		{"id":42,"media_type":"movie","imdb_id":"tt9999942","poster_path":"/legacy.jpg"},
+		{"id":42,"media_type":"tv","trashed":true},
+		{"id":45,"media_type":"movie"}
+	]`
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := openLibrary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := app{library: list, tmdb: tmdb{base: "https://tmdb.test", apiKey: "test-key", client: &http.Client{Transport: fakeTMDBTransport{}}}}
+	handler := a.handler()
+	for _, path := range []string{"movie/42", "tv/42", "movie/45"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/wishlist/"+path+"/metadata", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s: %d: %s", path, response.Code, response.Body)
+		}
+	}
+	list, err = openLibrary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movie, _ := list.find("movie", 42)
+	show, _ := list.find("tv", 42)
+	fallback, _ := list.find("movie", 45)
+	if strings.Join(movie.OriginCountries, ",") != "CA,US" || movie.IMDbID != "tt9999942" ||
+		movie.PosterPath != "/legacy.jpg" || movie.Date != "2024-08-02" ||
+		strings.Join(show.OriginCountries, ",") != "FR" || show.IMDbID != "tt2000042" || !show.Trashed ||
+		strings.Join(fallback.OriginCountries, ",") != "ES" {
+		t.Fatalf("unexpected persisted metadata: %+v, %+v, %+v", movie, show, fallback)
+	}
+	handler = (app{library: list}).handler()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/wishlist/movie/42/metadata", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("persisted metadata required a TMDB request: %d: %s", response.Code, response.Body)
 	}
 }
 
