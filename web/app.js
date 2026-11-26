@@ -37,6 +37,7 @@ const cardObserver = new IntersectionObserver((entries) => {
 }, { rootMargin: "200px" });
 let saved = [];
 let selectedTitle;
+let copyToast;
 let selectedCard;
 let gridColumns = "6";
 let rowSize = "medium";
@@ -349,21 +350,16 @@ function updateListActions() {
 }
 
 function showDetailLinks(item) {
-  const links = [];
-  if (/^tt[0-9]+$/.test(item.imdb_id)) {
-    links.push(["IMDb", "https://www.imdb.com/title/" + item.imdb_id + "/"]);
-  }
-  links.push(["TMDB", "https://www.themoviedb.org/" + keyFor(item)]);
-  if (item.media_type === "tv" && Number.isInteger(item.tvdb_id) && item.tvdb_id > 0) {
-    links.push(["TVDB", "https://thetvdb.com/dereferrer/series/" + item.tvdb_id]);
-  }
-  byId("details-links").replaceChildren(...links.map(([label, url]) => {
-    const link = element("a", "button secondary", label);
-    link.href = url;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    return link;
-  }));
+  const imdb = byId("details-imdb");
+  imdb.hidden = !/^tt[0-9]+$/.test(item.imdb_id);
+  if (!imdb.hidden) imdb.href = "https://www.imdb.com/title/" + item.imdb_id + "/";
+
+  const catalog = byId("details-catalog");
+  const hasTVDB = item.media_type === "tv" && Number.isInteger(item.tvdb_id) && item.tvdb_id > 0;
+  catalog.href = hasTVDB ? "https://thetvdb.com/dereferrer/series/" + item.tvdb_id : "https://www.themoviedb.org/" + keyFor(item);
+  catalog.title = hasTVDB ? "TVDB" : "TMDB";
+  catalog.setAttribute("aria-label", catalog.title);
+  byId("details-catalog-logo").src = hasTVDB ? "/tvdb.svg" : "/tmdb.svg";
 }
 
 async function openDetails(item, row) {
@@ -371,6 +367,7 @@ async function openDetails(item, row) {
   selectedTitle = item;
   selectedCard = row;
   byId("details-title").textContent = displayTitle(item);
+  clearTimeout(copyToast);
   detailsFeedback.textContent = "";
   displayNotice(detailsError);
   showDetailLinks(item);
@@ -388,9 +385,9 @@ async function openDetails(item, row) {
 
 async function copyTitle() {
   const title = displayTitle(selectedTitle);
+  displayNotice(detailsError);
   try {
     await navigator.clipboard.writeText(title);
-    detailsFeedback.textContent = "Title copied.";
   } catch {
     const field = element("textarea", "sr-only");
     field.value = title;
@@ -405,8 +402,14 @@ async function copyTitle() {
     }
     field.remove();
     byId("copy-title").focus();
-    detailsFeedback.textContent = copied ? "Title copied." : "Copy unavailable. Select and copy the title.";
+    if (!copied) {
+      displayNotice(detailsError, "Copy unavailable. Select and copy the title.");
+      return;
+    }
   }
+  clearTimeout(copyToast);
+  detailsFeedback.textContent = "Title copied.";
+  copyToast = setTimeout(() => { detailsFeedback.textContent = ""; }, 2600);
 }
 
 async function deleteTitle(item, row) {

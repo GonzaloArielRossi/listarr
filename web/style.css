@@ -193,10 +193,22 @@ dialog {
 dialog::backdrop { background: #000a; }
 .confirm, .title-details { max-width: 28rem; }
 .title-details h2 { overflow-wrap: anywhere; }
-.detail-links, .detail-actions { display: flex; flex-wrap: wrap; gap: .55rem; }
+.detail-links { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: .55rem; }
+.detail-links .button { min-width: 0; min-height: 3rem; padding: .4rem .55rem; }
 .detail-links a { text-decoration: none; }
 .detail-links a:hover { background: #303235; }
-.detail-actions { margin-top: 1.25rem; justify-content: space-between; }
+.service-logo { display: block; width: min(100%, 5.25rem); height: 1.55rem; object-fit: contain; }
+#copy-title .icon { width: 1.35rem; height: 1.35rem; }
+.detail-actions { display: flex; justify-content: flex-end; margin-top: 1.25rem; }
+#delete-title { background: #8c302d; border-color: #b74b43; color: #fff1ed; }
+#delete-title:hover:enabled { background: #a53b35; }
+.toast {
+  position: fixed; z-index: 1; left: 50%; bottom: max(1.25rem, env(safe-area-inset-bottom));
+  transform: translateX(-50%); pointer-events: none; white-space: nowrap;
+  padding: .6rem .85rem; border: 1px solid #496e56; border-radius: .55rem;
+  color: #d8f1df; background: #24392b; box-shadow: 0 .4rem 1.4rem #0007; font-size: .875rem;
+}
+.toast:empty { opacity: 0; }
 .confirm p { color: var(--muted); overflow-wrap: anywhere; }
 .confirm-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .65rem; margin-top: 1.25rem; }
 .dialog-heading, .pages { display: flex; align-items: center; justify-content: space-between; gap: .65rem; }

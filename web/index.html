@@ -92,14 +92,17 @@
   <dialog id="title-details" class="title-details" aria-labelledby="details-title">
     <div class="dialog-heading">
       <h2 id="details-title"></h2>
-      <form method="dialog"><button class="button secondary" type="submit" autofocus>Close</button></form>
+      <form method="dialog"><button class="icon-button" type="submit" aria-label="Close title details" autofocus><svg class="icon" aria-hidden="true"><use href="/icons.svg#x"></use></svg></button></form>
     </div>
-    <div class="detail-links" id="details-links"></div>
-    <p id="details-feedback" class="lookup-status" role="status"></p>
+    <div class="detail-links">
+      <a class="button secondary" id="details-imdb" target="_blank" rel="noopener noreferrer" aria-label="IMDb" title="IMDb" hidden><img class="service-logo" src="/imdb.svg" alt=""></a>
+      <a class="button secondary" id="details-catalog" target="_blank" rel="noopener noreferrer"><img class="service-logo" id="details-catalog-logo" src="/tmdb.svg" alt=""></a>
+      <button class="button secondary" id="copy-title" type="button" aria-label="Copy title" title="Copy title"><svg class="icon" aria-hidden="true"><use href="/icons.svg#clipboard"></use></svg></button>
+    </div>
+    <p id="details-feedback" class="toast" role="status"></p>
     <p id="details-error" class="notice" role="alert" hidden></p>
     <div class="detail-actions">
-      <button class="button secondary" id="copy-title" type="button">Copy title</button>
-      <button class="button danger" id="delete-title" type="button">Delete title</button>
+      <button class="button danger" id="delete-title" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#trash"></use></svg>Delete title</button>
     </div>
   </dialog>
 
