@@ -230,8 +230,8 @@ function card(item) {
   if (row.dataset.movieId || row.dataset.metadataKey) cardObserver.observe(row);
 
   const label = viewingArchive ? "Restore" : "Archive";
-  const action = element("button", viewingArchive ? "card-action" : "card-action archive", viewingArchive ? "↶" : "");
-  if (!viewingArchive) action.append(element("span", "archive-icon"));
+  const action = element("button", viewingArchive ? "card-action restore" : "card-action");
+  action.append(element("span", "tray-icon"));
   action.type = "button";
   action.dataset.key = keyFor(item);
   action.title = label;
