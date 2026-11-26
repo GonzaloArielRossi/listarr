@@ -9,11 +9,10 @@ const gridColumns = byId("grid-columns");
 const listError = byId("list-error");
 const showWishlist = byId("show-wishlist");
 const showArchive = byId("show-archive");
-const openLookup = byId("open-lookup");
+const searchTMDB = byId("search-tmdb");
 const clearArchive = byId("clear-archive");
 const confirmDialog = byId("confirm");
 const lookup = byId("lookup");
-const lookupQuery = byId("lookup-query");
 const lookupStatus = byId("lookup-status");
 const lookupError = byId("lookup-error");
 const lookupResults = byId("lookup-results");
@@ -295,8 +294,8 @@ function renderList() {
   } else {
     byId("empty-title").textContent = total ? "No matching titles" : "Your wishlist is empty";
     byId("empty-detail").textContent = total
-      ? "Try a different search or clear the filters."
-      : "Use Add title to find your first film or TV show.";
+      ? "Try a different search, clear the filters, or search TMDB."
+      : "Search TMDB to add your first title.";
   }
   byId("reset-filters").hidden = viewingArchive || !total;
 }
@@ -306,9 +305,7 @@ function switchView(isArchive) {
   showWishlist.setAttribute("aria-pressed", String(!isArchive));
   showArchive.setAttribute("aria-pressed", String(isArchive));
   byId("view-title").textContent = isArchive ? "Archive" : "Wishlist";
-  byId("view-detail").textContent = isArchive ? "Titles you’ve set aside. Restore them to your wishlist anytime." : "Films and TV shows you want to get.";
   byId("wishlist-filters").hidden = isArchive;
-  openLookup.hidden = isArchive;
   clearArchive.hidden = !isArchive;
   if (loaded) displayNotice(listError);
   if (!loaded && listError.hidden) byId("summary").textContent = isArchive ? "Loading archive…" : "Loading wishlist…";
@@ -334,7 +331,7 @@ function confirmAction(title, detail, label, action) {
 
 function updateListActions() {
   const busy = changingList || pendingAdds.size > 0;
-  openLookup.disabled = !loaded || changingList;
+  searchTMDB.disabled = !loaded || changingList;
   clearArchive.disabled = !archived.length || busy;
   for (const action of cards.querySelectorAll(".card-action")) action.disabled = busy;
 }
@@ -355,7 +352,7 @@ async function changeList(button, change) {
     renderList();
     if (restoreFocus) {
       const nextAction = [...cards.querySelectorAll(".card-action")].find((node) => node.dataset.key === nextKey);
-      (nextAction || cards.querySelector(".card-action") || (viewingArchive ? showArchive : openLookup)).focus();
+      (nextAction || cards.querySelector(".card-action") || (viewingArchive ? showArchive : titleFilter)).focus();
     }
     byId("feedback").textContent = message;
   } catch (error) {
@@ -411,20 +408,16 @@ async function addTitle(item, button) {
     });
     if (!isSaved(added)) saved.unshift(added);
     archived = archived.filter((other) => keyFor(other) !== key);
+    const resetSearch = lookupResults.contains(button) && titleFilter.value.trim() === completedQuery;
+    if (resetSearch) titleFilter.value = "";
     displayNotice(listError);
     updateLanguages();
     renderList();
-    const message = "Added " + displayTitle(added) + ".";
-    if (lookupResults.contains(button)) {
-      if (lookupQuery.value.trim() === completedQuery) {
-        lookupQuery.value = "";
-        lookupResults.replaceChildren();
-        byId("pages").hidden = true;
-        if (lookup.open) lookupQuery.focus();
-      }
-      lookupStatus.textContent = message;
+    if (resetSearch && lookup.open) {
+      lookup.close();
+      titleFilter.focus();
     }
-    if (!lookup.open) byId("feedback").textContent = message;
+    if (!lookup.open) byId("feedback").textContent = "Added " + displayTitle(added) + ".";
   } catch (error) {
     displayNotice(lookup.open ? lookupError : listError, error.message);
   } finally {
@@ -481,10 +474,6 @@ async function search(query, page) {
   }
 }
 
-openLookup.addEventListener("click", () => {
-  updateResultButtons();
-  lookup.showModal();
-});
 lookup.addEventListener("close", () => {
   if (lookupRequest) {
     lookupRequest.abort();
@@ -492,10 +481,12 @@ lookup.addEventListener("close", () => {
     lookupStatus.textContent = "";
   }
 });
-byId("lookup-form").addEventListener("submit", (event) => {
+byId("title-search").addEventListener("submit", (event) => {
   event.preventDefault();
-  const query = lookupQuery.value.trim();
-  if (query) search(query, 1);
+  const query = titleFilter.value.trim();
+  if (!query || searchTMDB.disabled) return;
+  lookup.showModal();
+  search(query, 1);
 });
 previous.addEventListener("click", () => search(completedQuery, currentPage - 1));
 next.addEventListener("click", () => search(completedQuery, currentPage + 1));
