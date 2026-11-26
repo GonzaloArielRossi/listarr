@@ -15,13 +15,14 @@ done
 # Docker can create the host bind directory as root on the first start.
 mkdir -p "$DATA_DIR"
 chown -h "$uid:$gid" "$DATA_DIR"
-wishlist="$DATA_DIR/wishlist.json"
-if [ -L "$wishlist" ]; then
-    echo "The wishlist data file must not be a symlink." >&2
-    exit 1
-fi
-if [ -f "$wishlist" ]; then
-    chown -h "$uid:$gid" "$wishlist"
-fi
+for file in "$DATA_DIR/wishlist.json" "$DATA_DIR/prowlarr.json"; do
+    if [ -L "$file" ]; then
+        echo "Listarr data files must not be symlinks." >&2
+        exit 1
+    fi
+    if [ -f "$file" ]; then
+        chown -h "$uid:$gid" "$file"
+    fi
+done
 
 exec su-exec "$uid:$gid" "$@"

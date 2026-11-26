@@ -19,6 +19,12 @@ const lookupError = byId("lookup-error");
 const lookupResults = byId("lookup-results");
 const previous = byId("previous-page");
 const next = byId("next-page");
+const prowlarrSettingsDialog = byId("prowlarr-settings");
+const prowlarrSearchDialog = byId("prowlarr-search");
+const prowlarrNavbarButton = byId("open-prowlarr");
+const prowlarrURL = byId("prowlarr-url");
+const prowlarrKey = byId("prowlarr-key");
+const prowlarrQuery = byId("prowlarr-query");
 
 const languageNames = new Intl.DisplayNames(["en"], { type: "language" });
 const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
@@ -49,6 +55,10 @@ let completedQuery = "";
 let currentPage = 1;
 let totalPages = 1;
 let loaded = false;
+let prowlarrConnection = { connected: false, url: "" };
+let waitingForProwlarr;
+let prowlarrKind;
+let prowlarrRequest;
 
 const keyFor = (item) => item.media_type + "/" + item.id;
 const isSaved = (item) => saved.some((other) => keyFor(other) === keyFor(item));
@@ -362,6 +372,88 @@ function showDetailLinks(item) {
   byId("details-catalog-logo").src = hasTVDB ? "/tvdb.svg" : "/tmdb.svg";
 }
 
+function updateProwlarrConnection(connection) {
+  prowlarrConnection = connection;
+  prowlarrNavbarButton.textContent = connection.connected ? "Prowlarr settings" : "Connect Prowlarr";
+}
+
+function openProwlarrSettings(item) {
+  waitingForProwlarr = item;
+  prowlarrURL.value = prowlarrConnection.url;
+  prowlarrKey.value = "";
+  prowlarrKey.required = !prowlarrConnection.connected;
+  prowlarrKey.placeholder = prowlarrConnection.connected ? "Leave blank to keep saved key" : "";
+  byId("prowlarr-settings-title").textContent = prowlarrNavbarButton.textContent;
+  byId("save-prowlarr").textContent = prowlarrConnection.connected ? "Save connection" : "Connect";
+  displayNotice(byId("prowlarr-settings-error"));
+  prowlarrSettingsDialog.showModal();
+}
+
+function openProwlarrSearch(item) {
+  if (!prowlarrConnection.connected) {
+    openProwlarrSettings(item);
+    return;
+  }
+  prowlarrKind = item.media_type;
+  prowlarrQuery.value = displayTitle(item);
+  prowlarrSearchDialog.showModal();
+  searchProwlarr();
+}
+
+const torrentSize = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+
+function renderTorrents(results, releases) {
+  for (const release of releases) {
+    const row = element("li");
+    const link = element("a", "prowlarr-result");
+    link.href = release.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    const metadata = [release.indexer];
+    if (release.size > 0) {
+      const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+      const unit = Math.min(Math.floor(Math.log(release.size) / Math.log(1024)), units.length - 1);
+      metadata.push(torrentSize.format(release.size / (1024 ** unit)) + " " + units[unit]);
+    }
+    if (release.seeders != null) {
+      metadata.push(release.seeders + (release.seeders === 1 ? " seeder" : " seeders"));
+    }
+    link.append(element("span", "prowlarr-result-title", release.title));
+    if (metadata.some(Boolean)) {
+      link.append(element("span", "prowlarr-result-meta", metadata.filter(Boolean).join(" · ")));
+    }
+    row.append(link);
+    results.append(row);
+  }
+}
+
+async function searchProwlarr() {
+  const query = prowlarrQuery.value.trim();
+  if (!query) return;
+  prowlarrRequest?.abort();
+  const request = new AbortController();
+  prowlarrRequest = request;
+  const params = new URLSearchParams({ q: query, kind: prowlarrKind });
+  const results = byId("prowlarr-results");
+  const status = byId("prowlarr-search-status");
+  const notice = byId("prowlarr-search-error");
+  displayNotice(notice);
+  results.replaceChildren();
+  status.textContent = "Searching Prowlarr…";
+  try {
+    const releases = await api("/api/prowlarr/search?" + params, { signal: request.signal });
+    if (request.signal.aborted) return;
+    renderTorrents(results, releases);
+    status.textContent = releases.length ? releases.length + (releases.length === 1 ? " torrent result" : " torrent results") : "No torrent results found.";
+  } catch (error) {
+    if (request.signal.aborted) return;
+    status.textContent = "";
+    displayNotice(notice, error.message);
+  } finally {
+    if (prowlarrRequest === request) prowlarrRequest = undefined;
+  }
+}
+
 async function openDetails(item, row) {
   if (titleDetails.open) return;
   selectedTitle = item;
@@ -567,6 +659,42 @@ byId("reset-filters").addEventListener("click", () => {
   titleFilter.focus();
 });
 byId("copy-title").addEventListener("click", copyTitle);
+prowlarrNavbarButton.addEventListener("click", () => openProwlarrSettings());
+byId("search-prowlarr").addEventListener("click", () => openProwlarrSearch(selectedTitle));
+byId("prowlarr-query-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  searchProwlarr();
+});
+prowlarrSearchDialog.addEventListener("close", () => prowlarrRequest?.abort());
+prowlarrSettingsDialog.addEventListener("close", () => {
+  prowlarrKey.value = "";
+  waitingForProwlarr = undefined;
+});
+byId("prowlarr-connection").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("save-prowlarr");
+  const notice = byId("prowlarr-settings-error");
+  if (button.disabled) return;
+  button.disabled = true;
+  displayNotice(notice);
+  try {
+    const connection = await api("/api/prowlarr/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: prowlarrURL.value.trim(), api_key: prowlarrKey.value }),
+    });
+    updateProwlarrConnection(connection);
+    if (prowlarrSettingsDialog.open) {
+      const item = waitingForProwlarr;
+      prowlarrSettingsDialog.close();
+      if (item && titleDetails.open) openProwlarrSearch(item);
+    }
+  } catch (error) {
+    displayNotice(notice, error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
 deleteButton.addEventListener("click", () => {
   const item = selectedTitle;
   const row = selectedCard;
@@ -593,3 +721,4 @@ async function loadWishlist() {
 
 loadDisplayOptions();
 loadWishlist();
+api("/api/prowlarr/settings").then(updateProwlarrConnection).catch(() => {});

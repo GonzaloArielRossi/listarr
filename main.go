@@ -154,13 +154,21 @@ func (list *library) remove(kind string, id int) error {
 }
 
 func (list *library) save(next []storedTitle) error {
-	file, err := os.CreateTemp(filepath.Dir(list.path), ".wishlist-*")
+	if err := saveJSON(list.path, next); err != nil {
+		return err
+	}
+	list.titles = next
+	return nil
+}
+
+func saveJSON(path string, value any) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".listarr-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
-	if err := json.NewEncoder(file).Encode(next); err != nil {
+	if err := json.NewEncoder(file).Encode(value); err != nil {
 		return err
 	}
 	if err := file.Sync(); err != nil {
@@ -169,17 +177,14 @@ func (list *library) save(next []storedTitle) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(file.Name(), list.path); err != nil {
-		return err
-	}
-	list.titles = next
-	return nil
+	return os.Rename(file.Name(), path)
 }
 
 type app struct {
-	library *library
-	tmdb    tmdb
-	region  string
+	library  *library
+	tmdb     tmdb
+	region   string
+	prowlarr *prowlarr
 }
 
 func (a app) handler() http.Handler {
@@ -194,6 +199,9 @@ func (a app) handler() http.Handler {
 	mux.HandleFunc("GET /api/wishlist/{kind}/{id}/metadata", a.titleMetadata)
 	mux.HandleFunc("POST /api/wishlist", a.add)
 	mux.HandleFunc("DELETE /api/wishlist/{kind}/{id}", a.deleteTitle)
+	if a.prowlarr != nil {
+		a.prowlarr.routes(mux)
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -370,13 +378,19 @@ func main() {
 	if len(region) != 2 || region[0] < 'A' || region[0] > 'Z' || region[1] < 'A' || region[1] > 'Z' {
 		log.Fatal("TMDB_REGION must be a two-letter country code.")
 	}
-	list, err := openLibrary(filepath.Join(env("DATA_DIR", "data"), "wishlist.json"))
+	dataDir := env("DATA_DIR", "data")
+	list, err := openLibrary(filepath.Join(dataDir, "wishlist.json"))
 	if err != nil {
 		log.Fatalf("open wishlist: %v", err)
 	}
+	prowlarr, err := openProwlarr(filepath.Join(dataDir, "prowlarr.json"))
+	if err != nil {
+		log.Fatalf("open Prowlarr settings: %v", err)
+	}
 	a := app{
-		library: list,
-		region:  region,
+		library:  list,
+		region:   region,
+		prowlarr: prowlarr,
 		tmdb: tmdb{
 			base:   "https://api.themoviedb.org/3",
 			apiKey: strings.TrimSpace(os.Getenv("TMDB_API_KEY")),

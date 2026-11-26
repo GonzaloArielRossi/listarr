@@ -20,7 +20,7 @@ ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
 RUN apk add --no-cache ca-certificates
-COPY go.mod main.go tmdb.go ./
+COPY go.mod main.go tmdb.go prowlarr.go ./
 COPY web/ ./web/
 RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
     go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/wishlist . \
