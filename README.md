@@ -25,8 +25,8 @@ After setup, run `git pull` in the same checkout on the Docker host. The running
 - Film cards show one release tag. **Released** means the film is available to stream in the configured country. **Released in Theaters** indicates a recorded theatrical release in any country, and **Upcoming** indicates a future release. Rental and purchase listings do not qualify as streaming. Set `TMDB_REGION` in `.env` to change the streaming country from Argentina (`AR`), then run `docker compose up -d` to apply the setting.
 - Search results and saved cards use the original title for English, Spanish, Italian, and French productions. Other productions use the English title when TMDB has one.
 - Use **Films** or **Shows** to filter by type alongside title and original language. Select the active button again to show both types.
-- Switch between **Grid** and **List** above the results. Grid supports 4, 5, or 6 cards per row and uses fewer columns when the screen is narrow. Listarr remembers these settings in your browser.
-- Use **Archive** on a card to set a title aside. Restore individual titles from **Archive**, or select **Clear archive** and confirm to permanently delete the archived titles.
+- Switch between **Grid** and **List** above the results. The adjacent menu sets 4, 5, or 6 cards per row in Grid, or Compact, Medium, and Large rows in List. Listarr remembers both settings in your browser.
+- Open a card for IMDb, TMDB, and available TVDB links, or to copy its title. Select **Delete title** and confirm to permanently delete it.
 
 Compose stores the list in `./listarr-data/wishlist.json` on the host. Startup assigns the mounted directory and any existing wishlist file to `PUID:PGID`, then runs the app as that user. The file survives a rebuild or `docker compose down`. To back it up, copy `./listarr-data/wishlist.json`.
 

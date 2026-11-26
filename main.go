@@ -34,6 +34,7 @@ type title struct {
 	OriginalLanguage string   `json:"original_language"`
 	PosterPath       string   `json:"poster_path"`
 	IMDbID           string   `json:"imdb_id,omitempty"`
+	TVDBID           *int     `json:"tvdb_id,omitempty"`
 	OriginCountries  []string `json:"origin_country"`
 }
 
@@ -49,6 +50,7 @@ type library struct {
 
 type storedTitle struct {
 	title
+	// Preserve titles set aside by older versions.
 	Archived bool `json:"trashed,omitempty"`
 }
 
@@ -68,15 +70,11 @@ func openLibrary(path string) (*library, error) {
 }
 
 func (list *library) snapshot() []title {
-	return list.titlesByArchiveStatus(false)
-}
-
-func (list *library) titlesByArchiveStatus(archived bool) []title {
 	list.mu.Lock()
 	defer list.mu.Unlock()
 	items := []title{}
 	for _, item := range list.titles {
-		if item.Archived == archived {
+		if !item.Archived {
 			items = append(items, item.title)
 		}
 	}
@@ -94,6 +92,10 @@ func (list *library) find(kind string, id int) (storedTitle, bool) {
 	return storedTitle{}, false
 }
 
+func (item title) hasMetadata() bool {
+	return item.OriginCountries != nil && (item.Kind != "tv" || item.TVDBID != nil)
+}
+
 func (list *library) fillMetadata(details title) (title, bool, error) {
 	list.mu.Lock()
 	defer list.mu.Unlock()
@@ -101,10 +103,15 @@ func (list *library) fillMetadata(details title) (title, bool, error) {
 		if item.Kind != details.Kind || item.ID != details.ID {
 			continue
 		}
-		if item.OriginCountries != nil {
+		if item.hasMetadata() {
 			return item.title, true, nil
 		}
-		item.OriginCountries = details.OriginCountries
+		if item.OriginCountries == nil {
+			item.OriginCountries = details.OriginCountries
+		}
+		if item.TVDBID == nil {
+			item.TVDBID = details.TVDBID
+		}
 		if item.IMDbID == "" {
 			item.IMDbID = details.IMDbID
 		}
@@ -126,48 +133,24 @@ func (list *library) add(item title) (title, bool, error) {
 			if !current.Archived {
 				return current.title, false, nil
 			}
-			return current.title, true, list.setArchived(index, false)
+			restored := append([]storedTitle{{title: current.title}}, list.titles[:index]...)
+			restored = append(restored, list.titles[index+1:]...)
+			return current.title, true, list.save(restored)
 		}
 	}
 	next := append([]storedTitle{{title: item}}, list.titles...)
 	return item, true, list.save(next)
 }
 
-func (list *library) move(kind string, id int, archived bool) (title, bool, error) {
+func (list *library) remove(kind string, id int) error {
 	list.mu.Lock()
 	defer list.mu.Unlock()
 	for index, item := range list.titles {
-		if item.Kind == kind && item.ID == id {
-			if item.Archived == archived {
-				return item.title, true, nil
-			}
-			return item.title, true, list.setArchived(index, archived)
+		if item.Kind == kind && item.ID == id && !item.Archived {
+			return list.save(slices.Delete(slices.Clone(list.titles), index, index+1))
 		}
 	}
-	return title{}, false, nil
-}
-
-// setArchived requires the caller to hold list.mu.
-func (list *library) setArchived(index int, archived bool) error {
-	item := list.titles[index]
-	item.Archived = archived
-	next := make([]storedTitle, 0, len(list.titles))
-	next = append(next, item)
-	next = append(next, list.titles[:index]...)
-	next = append(next, list.titles[index+1:]...)
-	return list.save(next)
-}
-
-func (list *library) clearArchive() error {
-	list.mu.Lock()
-	defer list.mu.Unlock()
-	next := slices.DeleteFunc(slices.Clone(list.titles), func(item storedTitle) bool {
-		return item.Archived
-	})
-	if len(next) == len(list.titles) {
-		return nil
-	}
-	return list.save(next)
+	return nil
 }
 
 func (list *library) save(next []storedTitle) error {
@@ -210,22 +193,7 @@ func (a app) handler() http.Handler {
 	mux.HandleFunc("GET /api/wishlist/movie/{id}/availability", a.movieAvailability)
 	mux.HandleFunc("GET /api/wishlist/{kind}/{id}/metadata", a.titleMetadata)
 	mux.HandleFunc("POST /api/wishlist", a.add)
-	mux.HandleFunc("POST /api/wishlist/{kind}/{id}/archive", a.moveTitle(true))
-	mux.HandleFunc("DELETE /api/wishlist/{kind}/{id}", a.moveTitle(true))
-	for _, path := range []string{"/api/archive", "/api/trash"} {
-		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w, http.StatusOK, a.library.titlesByArchiveStatus(true))
-		})
-		mux.HandleFunc("POST "+path+"/{kind}/{id}/restore", a.moveTitle(false))
-		mux.HandleFunc("DELETE "+path, func(w http.ResponseWriter, r *http.Request) {
-			if err := a.library.clearArchive(); err != nil {
-				log.Printf("clear archive: %v", err)
-				writeError(w, http.StatusInternalServerError, "Could not clear the archive.")
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		})
-	}
+	mux.HandleFunc("DELETE /api/wishlist/{kind}/{id}", a.deleteTitle)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -246,11 +214,11 @@ func (a app) titleMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item, found := a.library.find(kind, id)
-	if !found {
+	if !found || item.Archived {
 		writeError(w, http.StatusNotFound, "This title is no longer in the library.")
 		return
 	}
-	if item.OriginCountries != nil {
+	if item.hasMetadata() {
 		writeJSON(w, http.StatusOK, item.title)
 		return
 	}
@@ -278,7 +246,7 @@ func (a app) movieAvailability(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Select a valid film.")
 		return
 	}
-	if _, found := a.library.find("movie", id); !found {
+	if item, found := a.library.find("movie", id); !found || item.Archived {
 		writeError(w, http.StatusNotFound, "This film is no longer in the library.")
 		return
 	}
@@ -365,28 +333,19 @@ func (a app) add(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, item)
 }
 
-func (a app) moveTitle(archived bool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		kind := r.PathValue("kind")
-		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil || id < 1 || id > maxTMDBID || !validKind(kind) {
-			writeError(w, http.StatusBadRequest, "Select a valid film or TV show.")
-			return
-		}
-		item, found, err := a.library.move(kind, id, archived)
-		if err != nil {
-			log.Printf("save wishlist: %v", err)
-			writeError(w, http.StatusInternalServerError, "Could not save the wishlist.")
-			return
-		}
-		if archived {
-			w.WriteHeader(http.StatusNoContent)
-		} else if !found {
-			writeError(w, http.StatusNotFound, "This title is no longer in the archive.")
-		} else {
-			writeJSON(w, http.StatusOK, item)
-		}
+func (a app) deleteTitle(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id < 1 || id > maxTMDBID || !validKind(kind) {
+		writeError(w, http.StatusBadRequest, "Select a valid film or TV show.")
+		return
 	}
+	if err := a.library.remove(kind, id); err != nil {
+		log.Printf("save wishlist: %v", err)
+		writeError(w, http.StatusInternalServerError, "Could not save the wishlist.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -49,6 +49,7 @@ type remoteTitle struct {
 	} `json:"production_countries"`
 	ExternalIDs struct {
 		IMDbID string `json:"imdb_id"`
+		TVDBID int    `json:"tvdb_id"`
 	} `json:"external_ids"`
 }
 
@@ -128,6 +129,9 @@ func (t tmdb) details(ctx context.Context, kind string, id int) (title, error) {
 		err = errors.New("TMDB returned an unexpected title ID")
 	}
 	item := remote.toTitle(kind)
+	if kind == "tv" {
+		item.TVDBID = &remote.ExternalIDs.TVDBID
+	}
 	if item.OriginCountries == nil {
 		item.OriginCountries = []string{}
 	}

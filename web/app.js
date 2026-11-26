@@ -5,12 +5,13 @@ const titleFilter = byId("filter-title");
 const languageFilter = byId("filter-language");
 const typeFilters = [...document.querySelectorAll("[data-kind]")];
 const layoutButtons = [...document.querySelectorAll(".layout-switch button")];
-const gridColumns = byId("grid-columns");
+const displaySize = byId("display-size");
 const listError = byId("list-error");
-const showWishlist = byId("show-wishlist");
-const showArchive = byId("show-archive");
 const searchTMDB = byId("search-tmdb");
-const clearArchive = byId("clear-archive");
+const titleDetails = byId("title-details");
+const detailsFeedback = byId("details-feedback");
+const detailsError = byId("details-error");
+const deleteButton = byId("delete-title");
 const confirmDialog = byId("confirm");
 const lookup = byId("lookup");
 const lookupStatus = byId("lookup-status");
@@ -35,8 +36,10 @@ const cardObserver = new IntersectionObserver((entries) => {
   }
 }, { rootMargin: "200px" });
 let saved = [];
-let archived = [];
-let viewingArchive = false;
+let selectedTitle;
+let selectedCard;
+let gridColumns = "6";
+let rowSize = "medium";
 let typeFilter = "";
 let confirmedAction;
 let changingList = false;
@@ -54,6 +57,17 @@ function element(tag, className, text) {
   if (className) node.className = className;
   if (text) node.textContent = text;
   return node;
+}
+
+function icon(name) {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  const use = document.createElementNS(namespace, "use");
+  svg.setAttribute("class", "icon");
+  svg.setAttribute("aria-hidden", "true");
+  use.setAttribute("href", "/icons.svg#" + name);
+  svg.append(use);
+  return svg;
 }
 
 function displayNotice(node, message = "") {
@@ -99,10 +113,21 @@ function normalize(text) {
   return String(text ?? "").normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
 }
 
+const gridSizes = [["4", "4 per row"], ["5", "5 per row"], ["6", "6 per row"]];
+const listSizes = [["compact", "Compact"], ["medium", "Medium"], ["large", "Large"]];
+
 function applyDisplayOptions(layout) {
+  const list = layout === "list";
   cards.dataset.layout = layout;
-  cards.dataset.columns = gridColumns.value;
-  byId("grid-size").hidden = layout !== "grid";
+  cards.dataset.columns = gridColumns;
+  cards.dataset.rowSize = rowSize;
+  if (displaySize.dataset.layout !== layout) {
+    displaySize.dataset.layout = layout;
+    const sizes = list ? listSizes : gridSizes;
+    displaySize.replaceChildren(...sizes.map(([value, label]) => new Option(label, value)));
+    byId("display-size-label").textContent = list ? "List row size" : "Cards per row";
+  }
+  displaySize.value = list ? rowSize : gridColumns;
   for (const button of layoutButtons) {
     button.setAttribute("aria-pressed", String(button.dataset.layout === layout));
   }
@@ -111,20 +136,23 @@ function applyDisplayOptions(layout) {
 function saveDisplayOptions(layout) {
   applyDisplayOptions(layout);
   try {
-    localStorage.setItem("listarr.display", JSON.stringify({ layout, columns: gridColumns.value }));
+    localStorage.setItem("listarr.display", JSON.stringify({ layout, columns: gridColumns, rowSize }));
   } catch {
     // The current display still works when browser storage is unavailable.
   }
 }
 
 function loadDisplayOptions() {
+  let layout = "grid";
   try {
     const preferences = JSON.parse(localStorage.getItem("listarr.display"));
-    if (["4", "5", "6"].includes(preferences?.columns)) gridColumns.value = preferences.columns;
-    applyDisplayOptions(preferences?.layout === "list" ? "list" : "grid");
+    if (gridSizes.some(([value]) => value === preferences?.columns)) gridColumns = preferences.columns;
+    if (listSizes.some(([value]) => value === preferences?.rowSize)) rowSize = preferences.rowSize;
+    if (preferences?.layout === "list") layout = "list";
   } catch {
-    applyDisplayOptions("grid");
+    // Keep the defaults if the saved preferences are unavailable.
   }
+  applyDisplayOptions(layout);
 }
 
 function displayTitle(item) {
@@ -165,16 +193,21 @@ function loadCardData(path) {
   return cardRequests.get(path);
 }
 
+async function refreshMetadata(item) {
+  const details = await loadCardData("/api/wishlist/" + keyFor(item) + "/metadata");
+  item.origin_country = details.origin_country;
+  item.imdb_id = details.imdb_id;
+  item.tvdb_id = details.tvdb_id;
+  item.release_date = details.release_date;
+}
+
 async function loadCardMetadata(row) {
-  const key = row.dataset.metadataKey;
-  const item = (viewingArchive ? archived : saved).find(item => keyFor(item) === key);
+  const item = saved.find(item => keyFor(item) === row.dataset.metadataKey);
   if (!item) return;
   try {
-    const details = await loadCardData("/api/wishlist/" + key + "/metadata");
-    item.origin_country = details.origin_country;
-    item.imdb_id = details.imdb_id;
-    item.release_date = details.release_date;
+    await refreshMetadata(item);
     showCardMetadata(item, row.querySelector(".card-metadata"), row.querySelector(".card-origin"));
+    if (titleDetails.open && selectedTitle === item) showDetailLinks(item);
   } catch {
     // Keep the fields already saved with the title.
   }
@@ -183,7 +216,7 @@ async function loadCardMetadata(row) {
 function poster(item, size) {
   const frame = element("div", "poster");
   frame.setAttribute("aria-hidden", "true");
-  frame.append(element("span", "film-mark"));
+  frame.append(icon("film-strip"));
   if (/^\/[\w-]+\.(jpe?g|png|webp)$/i.test(item.poster_path)) {
     const image = element("img");
     image.alt = "";
@@ -206,10 +239,11 @@ function card(item) {
   const origin = element("span", "card-origin");
   origin.setAttribute("role", "img");
   const film = item.media_type === "movie";
-  const media = element("span", "media-badge " + (film ? "media-film" : "media-tv"));
+  const media = element("span", "media-badge");
   media.setAttribute("role", "img");
   media.title = film ? "Film" : "TV show";
   media.setAttribute("aria-label", media.title);
+  media.append(icon(film ? "film-slate" : "television"));
   heading.title = title;
   showCardMetadata(item, info, origin);
   if (item.origin_country == null) row.dataset.metadataKey = keyFor(item);
@@ -228,19 +262,14 @@ function card(item) {
   }
   if (row.dataset.movieId || row.dataset.metadataKey) cardObserver.observe(row);
 
-  const label = viewingArchive ? "Restore" : "Archive";
-  const action = element("button", viewingArchive ? "card-action restore" : "card-action");
-  action.append(element("span", "tray-icon"));
+  const action = element("button", "card-action");
   action.type = "button";
   action.dataset.key = keyFor(item);
-  action.title = label;
-  action.setAttribute("aria-label", label + " " + title);
-  action.addEventListener("click", () => {
-    if (viewingArchive) {
-      restoreTitle(item, action);
-    } else {
-      confirmAction("Archive this title?", "“" + title + "” will move to your archive. You can restore it anytime.", "Archive title", () => archiveTitle(item, action));
-    }
+  action.title = title;
+  action.setAttribute("aria-label", "Details for " + title);
+  action.setAttribute("aria-haspopup", "dialog");
+  row.addEventListener("click", () => {
+    if (!action.disabled) openDetails(item, row);
   });
   cover.append(poster(item, "w342"), media, origin);
   body.append(heading, info, status);
@@ -275,7 +304,7 @@ function renderList() {
   if (!loaded) return;
   const query = normalize(titleFilter.value.trim());
   const language = languageFilter.value;
-  const items = viewingArchive ? archived : saved.filter((item) => (
+  const items = saved.filter((item) => (
     (!typeFilter || item.media_type === typeFilter) &&
     (!language || languageKey(item) === language) &&
     (!query || [item.title, item.original_title, item.id, item.imdb_id].some((text) => normalize(text).includes(query)))
@@ -284,32 +313,15 @@ function renderList() {
   cards.replaceChildren(...items.map(card));
   updateListActions();
 
-  const total = viewingArchive ? archived.length : saved.length;
+  const total = saved.length;
   const count = total + (total === 1 ? " title" : " titles");
   byId("summary").textContent = items.length === total ? count : items.length + " of " + count;
   byId("empty").hidden = items.length > 0;
-  if (viewingArchive) {
-    byId("empty-title").textContent = "Your archive is empty";
-    byId("empty-detail").textContent = "Titles you archive from your wishlist appear here.";
-  } else {
-    byId("empty-title").textContent = total ? "No matching titles" : "Your wishlist is empty";
-    byId("empty-detail").textContent = total
-      ? "Try a different search, clear the filters, or search TMDB."
-      : "Search TMDB to add your first title.";
-  }
-  byId("reset-filters").hidden = viewingArchive || !total;
-}
-
-function switchView(isArchive) {
-  viewingArchive = isArchive;
-  showWishlist.setAttribute("aria-pressed", String(!isArchive));
-  showArchive.setAttribute("aria-pressed", String(isArchive));
-  byId("view-title").textContent = isArchive ? "Archive" : "Wishlist";
-  byId("wishlist-filters").hidden = isArchive;
-  clearArchive.hidden = !isArchive;
-  if (loaded) displayNotice(listError);
-  if (!loaded && listError.hidden) byId("summary").textContent = isArchive ? "Loading archive…" : "Loading wishlist…";
-  renderList();
+  byId("empty-title").textContent = total ? "No matching titles" : "Your wishlist is empty";
+  byId("empty-detail").textContent = total
+    ? "Try a different search, clear the filters, or search TMDB."
+    : "Search TMDB to add your first title.";
+  byId("reset-filters").hidden = !total;
 }
 
 function setTypeFilter(kind) {
@@ -332,55 +344,97 @@ function confirmAction(title, detail, label, action) {
 function updateListActions() {
   const busy = changingList || pendingAdds.size > 0;
   searchTMDB.disabled = !loaded || changingList;
-  clearArchive.disabled = !archived.length || busy;
+  deleteButton.disabled = busy;
   for (const action of cards.querySelectorAll(".card-action")) action.disabled = busy;
 }
 
-async function changeList(button, change) {
-  if (changingList || pendingAdds.size) return;
-  const startedInArchive = viewingArchive;
-  const nextKey = button.closest("li")?.nextElementSibling?.querySelector(".card-action")?.dataset.key;
-  changingList = true;
-  updateListActions();
-  displayNotice(listError);
-  try {
-    const message = await change();
-    updateLanguages();
-    const restoreFocus = startedInArchive === viewingArchive &&
-      (document.activeElement === button || document.activeElement === document.body);
-    changingList = false;
-    renderList();
-    if (restoreFocus) {
-      const nextAction = [...cards.querySelectorAll(".card-action")].find((node) => node.dataset.key === nextKey);
-      (nextAction || cards.querySelector(".card-action") || (viewingArchive ? showArchive : titleFilter)).focus();
+function showDetailLinks(item) {
+  const links = [];
+  if (/^tt[0-9]+$/.test(item.imdb_id)) {
+    links.push(["IMDb", "https://www.imdb.com/title/" + item.imdb_id + "/"]);
+  }
+  links.push(["TMDB", "https://www.themoviedb.org/" + keyFor(item)]);
+  if (item.media_type === "tv" && Number.isInteger(item.tvdb_id) && item.tvdb_id > 0) {
+    links.push(["TVDB", "https://thetvdb.com/dereferrer/series/" + item.tvdb_id]);
+  }
+  byId("details-links").replaceChildren(...links.map(([label, url]) => {
+    const link = element("a", "button secondary", label);
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    return link;
+  }));
+}
+
+async function openDetails(item, row) {
+  if (titleDetails.open) return;
+  selectedTitle = item;
+  selectedCard = row;
+  byId("details-title").textContent = displayTitle(item);
+  detailsFeedback.textContent = "";
+  displayNotice(detailsError);
+  showDetailLinks(item);
+  titleDetails.showModal();
+  if (item.origin_country == null || (item.media_type === "tv" && item.tvdb_id == null)) {
+    try {
+      await refreshMetadata(item);
+      showCardMetadata(item, row.querySelector(".card-metadata"), row.querySelector(".card-origin"));
+      if (titleDetails.open && selectedTitle === item) showDetailLinks(item);
+    } catch {
+      // Already-known links remain available.
     }
-    byId("feedback").textContent = message;
-  } catch (error) {
-    displayNotice(listError, error.message);
-    changingList = false;
-    updateListActions();
-    if (startedInArchive === viewingArchive && document.activeElement === document.body) button.focus();
   }
 }
 
-function archiveTitle(item, button) {
-  const key = keyFor(item);
-  return changeList(button, async () => {
-    await api("/api/wishlist/" + key + "/archive", { method: "POST" });
-    saved = saved.filter((other) => keyFor(other) !== key);
-    archived.unshift(item);
-    return "Archived " + displayTitle(item) + ".";
-  });
+async function copyTitle() {
+  const title = displayTitle(selectedTitle);
+  try {
+    await navigator.clipboard.writeText(title);
+    detailsFeedback.textContent = "Title copied.";
+  } catch {
+    const field = element("textarea", "sr-only");
+    field.value = title;
+    field.readOnly = true;
+    titleDetails.append(field);
+    field.select();
+    let copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch {
+      // The title can still be selected in the dialog.
+    }
+    field.remove();
+    byId("copy-title").focus();
+    detailsFeedback.textContent = copied ? "Title copied." : "Copy unavailable. Select and copy the title.";
+  }
 }
 
-function restoreTitle(item, button) {
+async function deleteTitle(item, row) {
+  if (changingList || pendingAdds.size) return;
   const key = keyFor(item);
-  return changeList(button, async () => {
-    const restored = await api("/api/archive/" + key + "/restore", { method: "POST" });
-    archived = archived.filter((other) => keyFor(other) !== key);
-    if (!isSaved(restored)) saved.unshift(restored);
-    return "Restored " + displayTitle(restored) + " to your wishlist.";
-  });
+  const nextKey = row.nextElementSibling?.querySelector(".card-action")?.dataset.key;
+  changingList = true;
+  updateListActions();
+  displayNotice(detailsError);
+  displayNotice(listError);
+  try {
+    await api("/api/wishlist/" + key, { method: "DELETE" });
+    saved = saved.filter(other => keyFor(other) !== key);
+    if (titleDetails.open && selectedTitle === item) titleDetails.close();
+    changingList = false;
+    updateLanguages();
+    renderList();
+    if (!titleDetails.open && !lookup.open && document.activeElement === document.body) {
+      const actions = [...cards.querySelectorAll(".card-action")];
+      (actions.find(button => button.dataset.key === nextKey) || actions[0] || titleFilter).focus();
+    }
+    byId("feedback").textContent = "Deleted " + displayTitle(item) + ".";
+  } catch (error) {
+    displayNotice(titleDetails.open && selectedTitle === item ? detailsError : listError, error.message);
+  } finally {
+    changingList = false;
+    updateListActions();
+  }
 }
 
 function updateResultButtons() {
@@ -407,7 +461,6 @@ async function addTitle(item, button) {
       body: JSON.stringify({ id: item.id, media_type: item.media_type }),
     });
     if (!isSaved(added)) saved.unshift(added);
-    archived = archived.filter((other) => keyFor(other) !== key);
     const resetSearch = lookupResults.contains(button) && titleFilter.value.trim() === completedQuery;
     if (resetSearch) titleFilter.value = "";
     displayNotice(listError);
@@ -495,7 +548,12 @@ languageFilter.addEventListener("change", renderList);
 for (const button of layoutButtons) {
   button.addEventListener("click", () => saveDisplayOptions(button.dataset.layout));
 }
-gridColumns.addEventListener("change", () => saveDisplayOptions("grid"));
+displaySize.addEventListener("change", () => {
+  const layout = cards.dataset.layout;
+  if (layout === "list") rowSize = displaySize.value;
+  else gridColumns = displaySize.value;
+  saveDisplayOptions(layout);
+});
 for (const button of typeFilters) {
   button.addEventListener("click", () => setTypeFilter(typeFilter === button.dataset.kind ? "" : button.dataset.kind));
 }
@@ -505,15 +563,11 @@ byId("reset-filters").addEventListener("click", () => {
   setTypeFilter("");
   titleFilter.focus();
 });
-showWishlist.addEventListener("click", () => switchView(false));
-showArchive.addEventListener("click", () => switchView(true));
-clearArchive.addEventListener("click", () => {
-  confirmAction("Clear the archive?", "All archived titles will be permanently deleted.", "Delete archived titles", () =>
-    changeList(clearArchive, async () => {
-      await api("/api/archive", { method: "DELETE" });
-      archived = [];
-      return "Archive cleared.";
-    }));
+byId("copy-title").addEventListener("click", copyTitle);
+deleteButton.addEventListener("click", () => {
+  const item = selectedTitle;
+  const row = selectedCard;
+  confirmAction("Delete this title?", "“" + displayTitle(item) + "” will be permanently deleted from your wishlist.", "Delete title", () => deleteTitle(item, row));
 });
 confirmDialog.addEventListener("close", () => {
   const action = confirmedAction;
@@ -523,7 +577,7 @@ confirmDialog.addEventListener("close", () => {
 
 async function loadWishlist() {
   try {
-    [saved, archived] = await Promise.all([api("/api/wishlist"), api("/api/archive")]);
+    saved = await api("/api/wishlist");
     loaded = true;
     updateLanguages();
     renderList();
