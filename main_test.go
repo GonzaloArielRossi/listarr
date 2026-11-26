@@ -152,7 +152,7 @@ func TestLegacyCardMetadata(t *testing.T) {
 	fallback, _ := list.find("movie", 45)
 	if strings.Join(movie.OriginCountries, ",") != "CA,US" || movie.IMDbID != "tt9999942" ||
 		movie.PosterPath != "/legacy.jpg" || movie.Date != "2024-08-02" ||
-		strings.Join(show.OriginCountries, ",") != "FR" || show.IMDbID != "tt2000042" || !show.Trashed ||
+		strings.Join(show.OriginCountries, ",") != "FR" || show.IMDbID != "tt2000042" || !show.Archived ||
 		strings.Join(fallback.OriginCountries, ",") != "ES" {
 		t.Fatalf("unexpected persisted metadata: %+v, %+v, %+v", movie, show, fallback)
 	}
@@ -241,8 +241,8 @@ func TestWishlistFilmAndTV(t *testing.T) {
 		t.Fatalf("unexpected saved metadata: %+v", items)
 	}
 
-	request(t, "DELETE", "/api/wishlist/tv/42", "", 204)
-	request(t, "DELETE", "/api/wishlist/tv/42", "", 204)
+	request(t, "POST", "/api/wishlist/tv/42/archive", "", 204)
+	request(t, "POST", "/api/wishlist/tv/42/archive", "", 204)
 	remaining, err := openLibrary(path)
 	if err != nil {
 		t.Fatal(err)
@@ -252,37 +252,40 @@ func TestWishlistFilmAndTV(t *testing.T) {
 	}
 	a.library = remaining
 	handler = a.handler()
-	if items := readItems("/api/trash"); len(items) != 1 || items[0].Kind != "tv" || items[0].IMDbID != "tt2000042" {
+	if items := readItems("/api/trash"); len(items) != 1 || items[0].Kind != "tv" {
+		t.Fatalf("legacy archive endpoint returned unexpected titles: %+v", items)
+	}
+	if items := readItems("/api/archive"); len(items) != 1 || items[0].Kind != "tv" || items[0].IMDbID != "tt2000042" {
 		t.Fatalf("trash did not preserve the removed show: %+v", items)
 	}
 
-	request(t, "POST", "/api/trash/tv/42/restore", "", 200)
-	request(t, "POST", "/api/trash/tv/42/restore", "", 200)
+	request(t, "POST", "/api/archive/tv/42/restore", "", 200)
+	request(t, "POST", "/api/archive/tv/42/restore", "", 200)
 	if items := readItems("/api/wishlist"); len(items) != 2 || items[0].Kind != "tv" {
 		t.Fatalf("expected the restored show first in the wishlist: %+v", items)
 	}
-	if items := readItems("/api/trash"); len(items) != 0 {
+	if items := readItems("/api/archive"); len(items) != 0 {
 		t.Fatalf("restored show is still in trash: %+v", items)
 	}
 
-	request(t, "DELETE", "/api/wishlist/tv/42", "", 204)
+	request(t, "POST", "/api/wishlist/tv/42/archive", "", 204)
 	a.tmdb = tmdb{}
 	handler = a.handler()
 	request(t, "POST", "/api/wishlist", `{"id":42,"media_type":"tv"}`, 201)
-	if items := readItems("/api/trash"); len(items) != 0 {
+	if items := readItems("/api/archive"); len(items) != 0 {
 		t.Fatalf("re-added show is still in trash: %+v", items)
 	}
-	request(t, "DELETE", "/api/wishlist/tv/42", "", 204)
-	request(t, "DELETE", "/api/trash", "", 204)
-	request(t, "DELETE", "/api/trash", "", 204)
+	request(t, "POST", "/api/wishlist/tv/42/archive", "", 204)
+	request(t, "DELETE", "/api/archive", "", 204)
+	request(t, "DELETE", "/api/archive", "", 204)
 
 	a.library, err = openLibrary(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	handler = a.handler()
-	request(t, "POST", "/api/trash/tv/42/restore", "", 404)
-	if items := readItems("/api/trash"); len(items) != 0 {
+	request(t, "POST", "/api/archive/tv/42/restore", "", 404)
+	if items := readItems("/api/archive"); len(items) != 0 {
 		t.Fatalf("trash still contains titles after emptying and reopening: %+v", items)
 	}
 	if items := readItems("/api/wishlist"); len(items) != 1 || items[0].Kind != "movie" {

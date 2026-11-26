@@ -14,7 +14,7 @@
       <div class="brand"><span class="film-mark" aria-hidden="true"></span> Film &amp; TV</div>
       <nav class="views" aria-label="Library">
         <button class="button secondary" id="show-wishlist" type="button" aria-pressed="true">Wishlist</button>
-        <button class="button secondary" id="show-trash" type="button" aria-pressed="false">Trash</button>
+        <button class="button secondary" id="show-archive" type="button" aria-pressed="false">Archive</button>
       </nav>
     </header>
 
@@ -25,7 +25,7 @@
           <p id="view-detail">Films and TV shows you want to get.</p>
         </div>
         <button class="button primary" id="open-lookup" type="button" disabled><span aria-hidden="true">+</span> Add title</button>
-        <button class="button danger" id="empty-trash" type="button" hidden disabled>Empty Trash</button>
+        <button class="button danger" id="clear-archive" type="button" hidden disabled>Clear archive</button>
       </div>
 
       <section aria-labelledby="view-title">
@@ -44,9 +44,25 @@
             <select id="filter-language"><option value="">All original languages</option></select>
           </label>
         </div>
-        <p class="list-summary" id="summary" aria-live="polite">Loading wishlist…</p>
+        <div class="results-toolbar">
+          <p class="list-summary" id="summary" aria-live="polite">Loading wishlist…</p>
+          <div class="display-controls">
+            <div class="layout-switch" role="group" aria-label="Display layout">
+              <button class="button secondary" type="button" data-layout="grid" aria-pressed="true" aria-controls="cards">Grid</button>
+              <button class="button secondary" type="button" data-layout="list" aria-pressed="false" aria-controls="cards">List</button>
+            </div>
+            <label class="select-field grid-size" id="grid-size">
+              <span class="sr-only">Cards per row</span>
+              <select id="grid-columns" aria-controls="cards">
+                <option value="4">4 per row</option>
+                <option value="5">5 per row</option>
+                <option value="6" selected>6 per row</option>
+              </select>
+            </label>
+          </div>
+        </div>
         <p class="notice" id="list-error" role="alert" hidden></p>
-        <ul class="cards" id="cards"></ul>
+        <ul class="cards" id="cards" data-layout="grid" data-columns="6"></ul>
 
         <div class="empty" id="empty" hidden>
           <div class="poster-stack" aria-hidden="true"><span></span><span></span><span><i></i></span></div>

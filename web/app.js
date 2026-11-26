@@ -4,11 +4,13 @@ const cards = byId("cards");
 const titleFilter = byId("filter-title");
 const languageFilter = byId("filter-language");
 const typeFilters = [...document.querySelectorAll("[data-kind]")];
+const layoutButtons = [...document.querySelectorAll(".layout-switch button")];
+const gridColumns = byId("grid-columns");
 const listError = byId("list-error");
 const showWishlist = byId("show-wishlist");
-const showTrash = byId("show-trash");
+const showArchive = byId("show-archive");
 const openLookup = byId("open-lookup");
-const emptyTrash = byId("empty-trash");
+const clearArchive = byId("clear-archive");
 const confirmDialog = byId("confirm");
 const lookup = byId("lookup");
 const lookupQuery = byId("lookup-query");
@@ -34,8 +36,8 @@ const cardObserver = new IntersectionObserver((entries) => {
   }
 }, { rootMargin: "200px" });
 let saved = [];
-let trashed = [];
-let viewingTrash = false;
+let archived = [];
+let viewingArchive = false;
 let typeFilter = "";
 let confirmedAction;
 let changingList = false;
@@ -98,6 +100,34 @@ function normalize(text) {
   return String(text ?? "").normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
 }
 
+function applyDisplayOptions(layout) {
+  cards.dataset.layout = layout;
+  cards.dataset.columns = gridColumns.value;
+  byId("grid-size").hidden = layout !== "grid";
+  for (const button of layoutButtons) {
+    button.setAttribute("aria-pressed", String(button.dataset.layout === layout));
+  }
+}
+
+function saveDisplayOptions(layout) {
+  applyDisplayOptions(layout);
+  try {
+    localStorage.setItem("listarr.display", JSON.stringify({ layout, columns: gridColumns.value }));
+  } catch {
+    // The current display still works when browser storage is unavailable.
+  }
+}
+
+function loadDisplayOptions() {
+  try {
+    const preferences = JSON.parse(localStorage.getItem("listarr.display"));
+    if (["4", "5", "6"].includes(preferences?.columns)) gridColumns.value = preferences.columns;
+    applyDisplayOptions(preferences?.layout === "list" ? "list" : "grid");
+  } catch {
+    applyDisplayOptions("grid");
+  }
+}
+
 function displayTitle(item) {
   if (originalTitleLanguages.has(item.original_language)) {
     return item.original_title || item.title;
@@ -138,7 +168,7 @@ function loadCardData(path) {
 
 async function loadCardMetadata(row) {
   const key = row.dataset.metadataKey;
-  const item = (viewingTrash ? trashed : saved).find(item => keyFor(item) === key);
+  const item = (viewingArchive ? archived : saved).find(item => keyFor(item) === key);
   if (!item) return;
   try {
     const details = await loadCardData("/api/wishlist/" + key + "/metadata");
@@ -176,11 +206,16 @@ function card(item) {
   const info = element("div", "card-metadata");
   const origin = element("span", "card-origin");
   origin.setAttribute("role", "img");
+  const film = item.media_type === "movie";
+  const media = element("span", "media-badge " + (film ? "media-film" : "media-tv"));
+  media.setAttribute("role", "img");
+  media.title = film ? "Film" : "TV show";
+  media.setAttribute("aria-label", media.title);
   heading.title = title;
   showCardMetadata(item, info, origin);
   if (item.origin_country == null) row.dataset.metadataKey = keyFor(item);
   const status = element("span", "badge card-status");
-  if (item.media_type === "movie") {
+  if (film) {
     row.dataset.movieId = item.id;
     const today = new Date().toISOString().slice(0, 10);
     const upcoming = /^\d{4}-\d{2}-\d{2}$/.test(item.release_date) && item.release_date > today;
@@ -194,22 +229,23 @@ function card(item) {
   }
   if (row.dataset.movieId || row.dataset.metadataKey) cardObserver.observe(row);
 
-  const label = viewingTrash ? "Restore" : "Remove";
-  const action = element("button", viewingTrash ? "card-action" : "card-action remove", viewingTrash ? "↶" : "");
+  const label = viewingArchive ? "Restore" : "Archive";
+  const action = element("button", viewingArchive ? "card-action" : "card-action archive", viewingArchive ? "↶" : "");
+  if (!viewingArchive) action.append(element("span", "archive-icon"));
   action.type = "button";
   action.dataset.key = keyFor(item);
   action.title = label;
   action.setAttribute("aria-label", label + " " + title);
   action.addEventListener("click", () => {
-    if (viewingTrash) {
+    if (viewingArchive) {
       restoreTitle(item, action);
     } else {
-      confirmAction("Move to Trash?", "“" + title + "” will move to Trash.", "Move to Trash", () => removeTitle(item, action));
+      confirmAction("Archive this title?", "“" + title + "” will move to your archive. You can restore it anytime.", "Archive title", () => archiveTitle(item, action));
     }
   });
-  cover.append(poster(item, "w342"), origin, action);
+  cover.append(poster(item, "w342"), media, origin);
   body.append(heading, info, status);
-  row.append(body, cover);
+  row.append(body, cover, action);
   return row;
 }
 
@@ -240,7 +276,7 @@ function renderList() {
   if (!loaded) return;
   const query = normalize(titleFilter.value.trim());
   const language = languageFilter.value;
-  const items = viewingTrash ? trashed : saved.filter((item) => (
+  const items = viewingArchive ? archived : saved.filter((item) => (
     (!typeFilter || item.media_type === typeFilter) &&
     (!language || languageKey(item) === language) &&
     (!query || [item.title, item.original_title, item.id, item.imdb_id].some((text) => normalize(text).includes(query)))
@@ -249,33 +285,33 @@ function renderList() {
   cards.replaceChildren(...items.map(card));
   updateListActions();
 
-  const total = viewingTrash ? trashed.length : saved.length;
+  const total = viewingArchive ? archived.length : saved.length;
   const count = total + (total === 1 ? " title" : " titles");
   byId("summary").textContent = items.length === total ? count : items.length + " of " + count;
   byId("empty").hidden = items.length > 0;
-  if (viewingTrash) {
-    byId("empty-title").textContent = "Trash is empty";
-    byId("empty-detail").textContent = "Titles you remove from your wishlist appear here.";
+  if (viewingArchive) {
+    byId("empty-title").textContent = "Your archive is empty";
+    byId("empty-detail").textContent = "Titles you archive from your wishlist appear here.";
   } else {
     byId("empty-title").textContent = total ? "No matching titles" : "Your wishlist is empty";
     byId("empty-detail").textContent = total
       ? "Try a different search or clear the filters."
       : "Use Add title to find your first film or TV show.";
   }
-  byId("reset-filters").hidden = viewingTrash || !total;
+  byId("reset-filters").hidden = viewingArchive || !total;
 }
 
-function switchView(trash) {
-  viewingTrash = trash;
-  showWishlist.setAttribute("aria-pressed", String(!trash));
-  showTrash.setAttribute("aria-pressed", String(trash));
-  byId("view-title").textContent = trash ? "Trash" : "Wishlist";
-  byId("view-detail").textContent = trash ? "Restore titles or permanently empty Trash." : "Films and TV shows you want to get.";
-  byId("wishlist-filters").hidden = trash;
-  openLookup.hidden = trash;
-  emptyTrash.hidden = !trash;
+function switchView(isArchive) {
+  viewingArchive = isArchive;
+  showWishlist.setAttribute("aria-pressed", String(!isArchive));
+  showArchive.setAttribute("aria-pressed", String(isArchive));
+  byId("view-title").textContent = isArchive ? "Archive" : "Wishlist";
+  byId("view-detail").textContent = isArchive ? "Titles you’ve set aside. Restore them to your wishlist anytime." : "Films and TV shows you want to get.";
+  byId("wishlist-filters").hidden = isArchive;
+  openLookup.hidden = isArchive;
+  clearArchive.hidden = !isArchive;
   if (loaded) displayNotice(listError);
-  if (!loaded && listError.hidden) byId("summary").textContent = trash ? "Loading Trash…" : "Loading wishlist…";
+  if (!loaded && listError.hidden) byId("summary").textContent = isArchive ? "Loading archive…" : "Loading wishlist…";
   renderList();
 }
 
@@ -299,13 +335,13 @@ function confirmAction(title, detail, label, action) {
 function updateListActions() {
   const busy = changingList || pendingAdds.size > 0;
   openLookup.disabled = !loaded || changingList;
-  emptyTrash.disabled = !trashed.length || busy;
+  clearArchive.disabled = !archived.length || busy;
   for (const action of cards.querySelectorAll(".card-action")) action.disabled = busy;
 }
 
 async function changeList(button, change) {
   if (changingList || pendingAdds.size) return;
-  const startedInTrash = viewingTrash;
+  const startedInArchive = viewingArchive;
   const nextKey = button.closest("li")?.nextElementSibling?.querySelector(".card-action")?.dataset.key;
   changingList = true;
   updateListActions();
@@ -313,38 +349,38 @@ async function changeList(button, change) {
   try {
     const message = await change();
     updateLanguages();
-    const restoreFocus = startedInTrash === viewingTrash &&
+    const restoreFocus = startedInArchive === viewingArchive &&
       (document.activeElement === button || document.activeElement === document.body);
     changingList = false;
     renderList();
     if (restoreFocus) {
       const nextAction = [...cards.querySelectorAll(".card-action")].find((node) => node.dataset.key === nextKey);
-      (nextAction || cards.querySelector(".card-action") || (viewingTrash ? showTrash : openLookup)).focus();
+      (nextAction || cards.querySelector(".card-action") || (viewingArchive ? showArchive : openLookup)).focus();
     }
     byId("feedback").textContent = message;
   } catch (error) {
     displayNotice(listError, error.message);
     changingList = false;
     updateListActions();
-    if (startedInTrash === viewingTrash && document.activeElement === document.body) button.focus();
+    if (startedInArchive === viewingArchive && document.activeElement === document.body) button.focus();
   }
 }
 
-function removeTitle(item, button) {
+function archiveTitle(item, button) {
   const key = keyFor(item);
   return changeList(button, async () => {
-    await api("/api/wishlist/" + key, { method: "DELETE" });
+    await api("/api/wishlist/" + key + "/archive", { method: "POST" });
     saved = saved.filter((other) => keyFor(other) !== key);
-    trashed.unshift(item);
-    return "Moved " + displayTitle(item) + " to Trash.";
+    archived.unshift(item);
+    return "Archived " + displayTitle(item) + ".";
   });
 }
 
 function restoreTitle(item, button) {
   const key = keyFor(item);
   return changeList(button, async () => {
-    const restored = await api("/api/trash/" + key + "/restore", { method: "POST" });
-    trashed = trashed.filter((other) => keyFor(other) !== key);
+    const restored = await api("/api/archive/" + key + "/restore", { method: "POST" });
+    archived = archived.filter((other) => keyFor(other) !== key);
     if (!isSaved(restored)) saved.unshift(restored);
     return "Restored " + displayTitle(restored) + " to your wishlist.";
   });
@@ -374,7 +410,7 @@ async function addTitle(item, button) {
       body: JSON.stringify({ id: item.id, media_type: item.media_type }),
     });
     if (!isSaved(added)) saved.unshift(added);
-    trashed = trashed.filter((other) => keyFor(other) !== key);
+    archived = archived.filter((other) => keyFor(other) !== key);
     displayNotice(listError);
     updateLanguages();
     renderList();
@@ -465,6 +501,10 @@ previous.addEventListener("click", () => search(completedQuery, currentPage - 1)
 next.addEventListener("click", () => search(completedQuery, currentPage + 1));
 titleFilter.addEventListener("input", renderList);
 languageFilter.addEventListener("change", renderList);
+for (const button of layoutButtons) {
+  button.addEventListener("click", () => saveDisplayOptions(button.dataset.layout));
+}
+gridColumns.addEventListener("change", () => saveDisplayOptions("grid"));
 for (const button of typeFilters) {
   button.addEventListener("click", () => setTypeFilter(typeFilter === button.dataset.kind ? "" : button.dataset.kind));
 }
@@ -475,13 +515,13 @@ byId("reset-filters").addEventListener("click", () => {
   titleFilter.focus();
 });
 showWishlist.addEventListener("click", () => switchView(false));
-showTrash.addEventListener("click", () => switchView(true));
-emptyTrash.addEventListener("click", () => {
-  confirmAction("Empty Trash?", "All titles in Trash will be permanently deleted.", "Empty Trash", () =>
-    changeList(emptyTrash, async () => {
-      await api("/api/trash", { method: "DELETE" });
-      trashed = [];
-      return "Trash emptied.";
+showArchive.addEventListener("click", () => switchView(true));
+clearArchive.addEventListener("click", () => {
+  confirmAction("Clear the archive?", "All archived titles will be permanently deleted.", "Delete archived titles", () =>
+    changeList(clearArchive, async () => {
+      await api("/api/archive", { method: "DELETE" });
+      archived = [];
+      return "Archive cleared.";
     }));
 });
 confirmDialog.addEventListener("close", () => {
@@ -492,7 +532,7 @@ confirmDialog.addEventListener("close", () => {
 
 async function loadWishlist() {
   try {
-    [saved, trashed] = await Promise.all([api("/api/wishlist"), api("/api/trash")]);
+    [saved, archived] = await Promise.all([api("/api/wishlist"), api("/api/archive")]);
     loaded = true;
     updateLanguages();
     renderList();
@@ -503,4 +543,5 @@ async function loadWishlist() {
   }
 }
 
+loadDisplayOptions();
 loadWishlist();
