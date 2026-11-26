@@ -171,25 +171,27 @@ h1 { font-size: clamp(3.05rem, 8vw, 5.25rem); font-weight: 730; letter-spacing: 
 .card-action:hover:enabled { background: var(--raised); color: var(--accent); }
 .media-badge {
   position: absolute; top: .45rem; left: .45rem;
-  display: grid; place-items: center; width: 1.8rem; aspect-ratio: 1;
-  border: 1px solid #fff3; border-radius: 50%; background: #141516ed; color: var(--ink);
+  display: grid; place-items: center; width: 2rem; aspect-ratio: 1;
+  border: 1px solid #fff4; border-radius: 50%; background: #141516; color: var(--ink);
 }
-.media-badge::before, .media-badge::after { content: ""; }
+.media-badge::before, .media-badge::after { content: ""; grid-area: 1 / 1; }
 .media-film::before {
-  grid-area: 1 / 1; width: .82rem; height: .68rem;
-  border: 1px solid currentColor; border-inline-width: 2px; border-radius: .1rem;
+  width: 1.06rem; height: .64rem; transform: translateY(.19rem);
+  border: 1.5px solid currentColor; border-radius: .12rem;
+  background: linear-gradient(currentColor, currentColor) center / .56rem 1px no-repeat;
 }
 .media-film::after {
-  grid-area: 1 / 1; width: .73rem; height: .47rem;
-  background: repeating-linear-gradient(currentColor 0 1px, transparent 1px 3px) left / 2px 100% no-repeat,
-    repeating-linear-gradient(currentColor 0 1px, transparent 1px 3px) right / 2px 100% no-repeat;
+  width: 1.06rem; height: .24rem; transform: translateY(-.2rem) rotate(-16deg);
+  border: 1px solid currentColor; border-radius: .075rem;
+  background: repeating-linear-gradient(125deg, currentColor 0 2px, transparent 2px 4px);
 }
 .media-tv::before {
-  grid-area: 1 / 1; width: .85rem; height: .55rem; margin-bottom: .16rem;
-  border: 1px solid currentColor; border-radius: .125rem;
+  width: 1.06rem; height: .71rem; transform: translateY(.16rem);
+  border: 1.5px solid currentColor; border-radius: .2rem;
 }
 .media-tv::after {
-  grid-area: 1 / 1; width: .42rem; height: 1px; margin-top: .63rem; background: currentColor;
+  width: .44rem; height: .44rem; transform: translateY(-.3rem) rotate(45deg);
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
 }
 .cards[data-layout="list"] { grid-template-columns: minmax(0, 1fr); gap: .55rem; }
 .cards[data-layout="list"] .card { grid-template: "cover caption" / 4rem minmax(0, 1fr); }
