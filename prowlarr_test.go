@@ -147,3 +147,77 @@ func TestProwlarrManualSearch(t *testing.T) {
 	call("PUT", "/api/prowlarr/settings", `{"url":"`+base+`"}`, http.StatusOK)
 	call("GET", results[0].URL, "", http.StatusNotFound)
 }
+
+func TestProwlarrTitleAndIDSearch(t *testing.T) {
+	p, err := openProwlarr(filepath.Join(t.TempDir(), "prowlarr.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.settings = prowlarrSettings{URL: "https://prowlarr.test", APIKey: "fixture-only-key"}
+	requests := make(chan [3]string, 10)
+	p.client.Transport = prowlarrTestTransport(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query()
+		requests <- [3]string{q.Get("query"), q.Get("type"), q.Get("categories")}
+		rec := httptest.NewRecorder()
+		switch q.Get("query") {
+		case "{imdbid:tt2000042}":
+			io.WriteString(rec, `[{"guid":"same-release","indexerId":3,"title":"Signal S01","protocol":"torrent"}]`)
+		case "Signal de nuit":
+			io.WriteString(rec, `[{"guid":"same-release","indexerId":3,"title":"Signal S01","protocol":"torrent","infoUrl":"https://tracker.test/thread/3"}]`)
+		case "Night Signal":
+			io.WriteString(rec, `[{"guid":"other-release","indexerId":3,"title":"Night Signal S01","protocol":"torrent"}]`)
+		case "{tmdbid:42}":
+			rec.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			io.WriteString(rec, "[]")
+		}
+		return rec.Result(), nil
+	})
+	handler := (app{prowlarr: p}).handler()
+	get := func(query string, status int) []trackerResult {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest("GET", "/api/prowlarr/search?view=tracker&"+query, nil))
+		if rec.Code != status {
+			t.Fatalf("status %d for %s: %s", rec.Code, query, rec.Body.String())
+		}
+		var results []trackerResult
+		if status == http.StatusOK {
+			if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return results
+	}
+
+	results := get("kind=tv&q=Signal+de+nuit&alternate=Night+Signal&imdb=tt2000042&tmdb=42&tvdb=12345", http.StatusOK)
+	if len(results) != 2 || results[0].TrackerURL != "https://tracker.test/thread/3" || results[1].Title != "Night Signal S01" {
+		t.Fatalf("expected merged results with usable tracker link: %+v", results)
+	}
+	want := map[[3]string]bool{
+		{"{imdbid:tt2000042}", "tvsearch", "5000"}: true,
+		{"{tmdbid:42}", "tvsearch", "5000"}:        true,
+		{"{tvdbid:12345}", "tvsearch", "5000"}:     true,
+		{"Signal de nuit", "search", "5000"}:       true,
+		{"Night Signal", "search", "5000"}:         true,
+	}
+	for len(requests) > 0 {
+		got := <-requests
+		if !want[got] {
+			t.Fatalf("unexpected or repeated request: %v", got)
+		}
+		delete(want, got)
+	}
+	if len(want) > 0 {
+		t.Fatalf("missing Prowlarr searches: %v", want)
+	}
+	get("kind=movie&q=tt0133093&alternate=Other&tmdb=42", http.StatusOK)
+	if len(requests) != 1 || <-requests != [3]string{"{imdbid:tt0133093}", "movie", "2000"} {
+		t.Fatal("direct IMDb ID search did not send an IMDb-only movie request")
+	}
+	get("kind=movie&q=tvdb%3A12345", http.StatusBadRequest)
+	get("kind=tv&q=tmdb%3Anope", http.StatusBadRequest)
+	if len(requests) != 0 {
+		t.Fatal("invalid IDs reached Prowlarr")
+	}
+}

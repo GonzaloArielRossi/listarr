@@ -256,6 +256,11 @@ func (a app) titleFilmAffinity(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !imdbPattern.MatchString(item.IMDbID) {
+		if details, err := a.tmdb.details(r.Context(), item.Kind, item.ID); err == nil {
+			item.IMDbID = details.IMDbID
+		}
+	}
 	id, err := lookupFilmAffinity(r.Context(), a.wikidata, item.title)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "FilmAffinity lookup is temporarily unavailable.")

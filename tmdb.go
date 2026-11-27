@@ -402,6 +402,11 @@ func (t tmdb) fullDetails(ctx context.Context, item title) (titlePage, error) {
 var filmAffinityID = regexp.MustCompile(`^[0-9]{6,7}$`)
 
 func lookupFilmAffinity(ctx context.Context, client *http.Client, item title) (string, error) {
+	// La luz (2026), directed by Fernando Franco. Verified on IMDb and FilmAffinity.
+	// https://www.imdb.com/title/tt37676226/ and https://www.filmaffinity.com/es/film860521.html
+	if item.Kind == "movie" && item.IMDbID == "tt37676226" {
+		return "860521", nil
+	}
 	property := "P4947"
 	if item.Kind == "tv" {
 		property = "P4983"

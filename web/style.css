@@ -223,6 +223,7 @@ dialog::backdrop { background: #000a; }
 .title-tagline { margin-top: .5rem; font-style: italic; }
 .title-links, .title-copy, .title-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin-top: .75rem; }
 .title-links a { text-decoration: none; }
+#details-filmaffinity .service-logo { border-radius: .2rem; }
 .title-copy .button { font-size: .82rem; min-height: 2.5rem; padding: .45rem .65rem; }
 #filmaffinity-status { margin-top: .4rem; }
 .title-content { display: grid; gap: 1.75rem; margin-top: 1.75rem; }

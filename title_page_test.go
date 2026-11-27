@@ -21,6 +21,7 @@ func titlePageFixture(t *testing.T) app {
 		{ID: 42, Kind: "movie", Name: "Summer Signal", IMDbID: "tt1000042", OriginCountries: []string{"CA"}},
 		{ID: 42, Kind: "tv", Name: "Night Signal", OriginalName: "Signal de nuit", OriginalLanguage: "fr", IMDbID: "tt2000042", OriginCountries: []string{"FR"}},
 		{ID: 45, Kind: "movie", Name: "Indigo", OriginCountries: []string{"ES"}},
+		{ID: 46, Kind: "movie", Name: "La luz", OriginCountries: []string{"ES"}},
 	} {
 		if _, _, err := list.add(item); err != nil {
 			t.Fatal(err)
@@ -36,6 +37,8 @@ func titlePageFixture(t *testing.T) app {
 				fmt.Fprint(w, `{"id":42,"title":"Summer Signal","release_date":"2024-08-02","runtime":102,"genres":[{"name":"Drama"}],"overview":"A film about a radio signal.","status":"Released","vote_average":7.4,"vote_count":12,"production_countries":[{"iso_3166_1":"CA"}],"credits":{"cast":[{"name":"Alex Example","character":"The Operator"}],"crew":[{"name":"Dana Example","job":"Director"}]}}`)
 			case req.URL.Path == "/tv/42" && query == "external_ids,credits,aggregate_credits":
 				fmt.Fprint(w, `{"id":42,"name":"Night Signal","original_name":"Signal de nuit","original_language":"fr","first_air_date":"2025-11-09","origin_country":["FR"],"overview":"A series about a radio signal.","created_by":[{"name":"Dana Example"}],"external_ids":{"imdb_id":"tt2000042","tvdb_id":12345},"credits":{"cast":[{"name":"Guest Example"}]},"aggregate_credits":{"cast":[{"name":"Riley Example","roles":[{"character":"The Engineer"},{"character":"The Caller"}]}]},"number_of_seasons":1,"seasons":[{"name":"Season 1","episode_count":6,"season_number":1}]}`)
+			case req.URL.Path == "/movie/46":
+				fmt.Fprint(w, `{"id":46,"title":"The Light","original_title":"La luz","original_language":"es","release_date":"2026-06-05","imdb_id":"tt37676226","origin_country":["ES"]}`)
 			default:
 				fakeTMDB(w, req)
 			}
@@ -91,7 +94,7 @@ func TestTitlePageAndExternalIDs(t *testing.T) {
 		len(series.Cast[0].Roles) != 2 || len(series.Seasons) != 1 || series.Seasons[0].EpisodeCount != 6 {
 		t.Fatalf("unexpected series metadata: %+v", series)
 	}
-	for path, id := range map[string]string{"movie/42": "123456", "tv/42": "654321", "movie/45": ""} {
+	for path, id := range map[string]string{"movie/42": "123456", "tv/42": "654321", "movie/45": "", "movie/46": "860521"} {
 		rec := get("/api/wishlist/"+path+"/filmaffinity", http.StatusOK)
 		var result map[string]string
 		if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || result["id"] != id {

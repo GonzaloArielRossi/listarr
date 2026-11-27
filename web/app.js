@@ -61,7 +61,7 @@ let totalPages = 1;
 let loaded = false;
 let prowlarrConnection = { connected: false, url: "" };
 let waitingForProwlarr;
-let prowlarrKind;
+let prowlarrItem;
 let prowlarrRequest;
 
 const keyFor = (item) => item.media_type + "/" + item.id;
@@ -380,7 +380,7 @@ function openProwlarrSearch(item) {
     openProwlarrSettings(item);
     return;
   }
-  prowlarrKind = item.media_type;
+  prowlarrItem = item;
   prowlarrQuery.value = displayTitle(item);
   prowlarrSearchDialog.showModal();
   searchProwlarr();
@@ -438,7 +438,17 @@ async function searchProwlarr() {
   prowlarrRequest?.abort();
   const request = new AbortController();
   prowlarrRequest = request;
-  const params = new URLSearchParams({ q: query, kind: prowlarrKind, view: "tracker" });
+  const item = selectedTitle && keyFor(selectedTitle) === keyFor(prowlarrItem) ? selectedTitle : prowlarrItem;
+  const params = new URLSearchParams({ q: query, kind: item.media_type, view: "tracker" });
+  const sameTitle = (title) => title.trim().toLocaleLowerCase() === query.toLocaleLowerCase();
+  const useTitleMetadata = sameTitle(displayTitle(prowlarrItem));
+  if (useTitleMetadata) {
+    const alternate = [item.original_title, item.title].find(title => title && !sameTitle(title));
+    if (alternate) params.set("alternate", alternate);
+    params.set("tmdb", item.id);
+    if (item.imdb_id) params.set("imdb", item.imdb_id);
+    if (item.tvdb_id > 0) params.set("tvdb", item.tvdb_id);
+  }
   const results = byId("prowlarr-results");
   const status = byId("prowlarr-search-status");
   const notice = byId("prowlarr-search-error");
@@ -446,7 +456,7 @@ async function searchProwlarr() {
   results.replaceChildren();
   const table = byId("prowlarr-table");
   table.hidden = true;
-  status.textContent = "Searching Prowlarr…";
+  status.textContent = useTitleMetadata ? "Searching Prowlarr by title and available IDs…" : "Searching Prowlarr…";
   try {
     const releases = await api("/api/prowlarr/search?" + params, { signal: request.signal });
     if (request.signal.aborted) return;
@@ -499,6 +509,11 @@ function showTitleHeader(item) {
   const imdb = byId("details-imdb");
   imdb.hidden = !/^tt[0-9]+$/.test(item.imdb_id);
   if (!imdb.hidden) imdb.href = "https://www.imdb.com/title/" + item.imdb_id + "/";
+  const filmAffinity = byId("details-filmaffinity");
+  filmAffinity.href = "https://www.filmaffinity.com/es/advsearch.php";
+  filmAffinity.setAttribute("aria-label", "Search FilmAffinity");
+  filmAffinity.title = "Search FilmAffinity";
+  filmAffinity.hidden = false;
   byId("details-tmdb").href = "https://www.themoviedb.org/" + keyFor(item);
   const tvdb = byId("details-tvdb");
   tvdb.hidden = item.media_type !== "tv" || !(item.tvdb_id > 0);
@@ -726,8 +741,15 @@ async function showCurrentPage(focus = false) {
   }
   const result = await affinity;
   if (request.signal.aborted || !selectedTitle) return;
-  if (result.id) byId("details-copy").append(copyAction("FilmAffinity ID", result.id));
-  else setOptionalText("filmaffinity-status", result.failed ? "FilmAffinity lookup temporarily unavailable." : "FilmAffinity ID unavailable.");
+  if (result.id) {
+    const filmAffinity = byId("details-filmaffinity");
+    filmAffinity.href = "https://www.filmaffinity.com/es/film" + result.id + ".html";
+    filmAffinity.setAttribute("aria-label", "FilmAffinity");
+    filmAffinity.title = "FilmAffinity";
+    byId("details-copy").append(copyAction("FilmAffinity ID", result.id));
+  } else {
+    setOptionalText("filmaffinity-status", result.failed ? "FilmAffinity lookup temporarily unavailable." : "No FilmAffinity ID match found.");
+  }
 }
 
 async function deleteTitle(item) {

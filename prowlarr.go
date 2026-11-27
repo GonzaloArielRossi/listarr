@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -201,6 +202,158 @@ type trackerResult struct {
 	} `json:"categories"`
 }
 
+type prowlarrRelease struct {
+	trackerResult
+	GUID        string
+	IndexerID   int
+	InfoURL     string
+	CommentURL  string
+	MagnetURL   string
+	DownloadURL string
+}
+
+type prowlarrQuery struct {
+	term string
+	mode string
+}
+
+func validProwlarrID(provider, value string) bool {
+	if provider == "imdb" {
+		if !imdbPattern.MatchString(value) {
+			return false
+		}
+		value = strings.TrimPrefix(value, "tt")
+	}
+	id, err := strconv.ParseInt(value, 10, 32)
+	return err == nil && id > 0 && tmdbPattern.MatchString(value)
+}
+
+func trackerQueries(kind, term string, params url.Values) ([]prowlarrQuery, bool) {
+	mode := "movie"
+	if kind == "tv" {
+		mode = "tvsearch"
+	}
+	idQuery := func(provider, value string) prowlarrQuery {
+		return prowlarrQuery{"{" + provider + "id:" + value + "}", mode}
+	}
+
+	provider, value, prefixed := strings.Cut(strings.ToLower(term), ":")
+	if !prefixed && imdbPattern.MatchString(provider) {
+		value, provider = provider, "imdb"
+		prefixed = true
+	}
+	if prefixed && (provider == "imdb" || provider == "tmdb" || provider == "tvdb") {
+		value = strings.TrimSpace(value)
+		if provider == "imdb" && tmdbPattern.MatchString(value) {
+			value = "tt" + value
+		}
+		if !validProwlarrID(provider, value) || (provider == "tvdb" && kind != "tv") {
+			return nil, false
+		}
+		return []prowlarrQuery{idQuery(provider, value)}, true
+	}
+
+	queries := make([]prowlarrQuery, 0, 5)
+	for _, provider := range []string{"imdb", "tmdb", "tvdb"} {
+		value := params.Get(provider)
+		if validProwlarrID(provider, value) && (provider != "tvdb" || kind == "tv") {
+			queries = append(queries, idQuery(provider, value))
+		}
+	}
+	queries = append(queries, prowlarrQuery{term, "search"})
+	alternate := strings.TrimSpace(params.Get("alternate"))
+	if alternate != "" && utf8.RuneCountInString(alternate) <= 256 && !strings.EqualFold(term, alternate) {
+		queries = append(queries, prowlarrQuery{alternate, "search"})
+	}
+	return queries, true
+}
+
+func (p *prowlarr) fetchReleases(ctx context.Context, settings prowlarrSettings, category string, query prowlarrQuery) ([]prowlarrRelease, error) {
+	var releases []prowlarrRelease
+	err := p.fetch(ctx, settings, "/api/v1/search", url.Values{
+		"query": {query.term}, "type": {query.mode}, "categories": {category},
+	}, &releases)
+	return releases, err
+}
+
+func (p *prowlarr) searchTracker(w http.ResponseWriter, r *http.Request, settings prowlarrSettings, category, kind, term string) {
+	queries, valid := trackerQueries(kind, term, r.URL.Query())
+	if !valid {
+		writeError(w, http.StatusBadRequest, "Enter a valid IMDb, TMDB, or TVDB ID. TVDB searches require a show.")
+		return
+	}
+	type batch struct {
+		releases []prowlarrRelease
+		err      error
+	}
+	batches := make([]batch, len(queries))
+	var pending sync.WaitGroup
+	for i, query := range queries {
+		pending.Go(func() {
+			batches[i].releases, batches[i].err = p.fetchReleases(r.Context(), settings, category, query)
+		})
+	}
+	pending.Wait()
+	if r.Context().Err() != nil {
+		return
+	}
+	if p.snapshot() != settings {
+		writeError(w, http.StatusConflict, "The Prowlarr connection changed. Search again.")
+		return
+	}
+
+	results := []trackerResult{}
+	type releaseKey struct {
+		indexerID int
+		indexer   string
+		protocol  string
+		guid      string
+		title     string
+		size      int64
+	}
+	seen := make(map[releaseKey]int)
+	failed := 0
+	for _, batch := range batches {
+		if batch.err != nil {
+			failed++
+			continue
+		}
+		for _, release := range batch.releases {
+			if release.Title == "" || (release.Protocol != "torrent" && release.Protocol != "usenet") {
+				continue
+			}
+			result := release.trackerResult
+			result.TrackerURL = trackerPageURL(release.InfoURL, settings.APIKey)
+			if result.TrackerURL == "" {
+				result.TrackerURL = trackerPageURL(release.CommentURL, settings.APIKey)
+			}
+			key := releaseKey{indexerID: release.IndexerID, indexer: release.Indexer, protocol: release.Protocol, guid: release.GUID}
+			if key.guid == "" {
+				key.title, key.size = strings.ToLower(release.Title), release.Size
+			}
+			if i, duplicate := seen[key]; duplicate {
+				if results[i].TrackerURL == "" {
+					results[i].TrackerURL = result.TrackerURL
+				}
+				continue
+			}
+			if len(results) < prowlarrResultLimit {
+				seen[key] = len(results)
+				results = append(results, result)
+			}
+		}
+	}
+	if len(results) == 0 && failed > 0 {
+		for _, batch := range batches {
+			if batch.err != nil {
+				writeProwlarrError(w, batch.err)
+				return
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
 func (p *prowlarr) search(w http.ResponseWriter, r *http.Request) {
 	settings := p.snapshot()
 	if settings.APIKey == "" {
@@ -210,7 +363,7 @@ func (p *prowlarr) search(w http.ResponseWriter, r *http.Request) {
 	kind := r.URL.Query().Get("kind")
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if !validKind(kind) || query == "" || utf8.RuneCountInString(query) > 256 {
-		writeError(w, http.StatusBadRequest, "Enter a title to search for (up to 256 characters).")
+		writeError(w, http.StatusBadRequest, "Enter a title or ID to search for (up to 256 characters).")
 		return
 	}
 	category := "2000"
@@ -218,38 +371,13 @@ func (p *prowlarr) search(w http.ResponseWriter, r *http.Request) {
 		category = "5000"
 	}
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(prowlarrTimeout + 5*time.Second))
-	var releases []struct {
-		trackerResult
-		InfoURL     string
-		CommentURL  string
-		MagnetURL   string
-		DownloadURL string
-	}
-	err := p.fetch(r.Context(), settings, "/api/v1/search", url.Values{
-		"query": {query}, "type": {"search"}, "categories": {category},
-	}, &releases)
-	if err != nil {
-		writeProwlarrError(w, err)
+	if r.URL.Query().Get("view") == "tracker" {
+		p.searchTracker(w, r, settings, category, kind, query)
 		return
 	}
-
-	if r.URL.Query().Get("view") == "tracker" {
-		results := []trackerResult{}
-		for _, release := range releases {
-			if release.Title == "" || (release.Protocol != "torrent" && release.Protocol != "usenet") {
-				continue
-			}
-			result := release.trackerResult
-			result.TrackerURL = trackerPageURL(release.InfoURL, settings.APIKey)
-			if result.TrackerURL == "" {
-				result.TrackerURL = trackerPageURL(release.CommentURL, settings.APIKey)
-			}
-			results = append(results, result)
-			if len(results) == prowlarrResultLimit {
-				break
-			}
-		}
-		writeJSON(w, http.StatusOK, results)
+	releases, err := p.fetchReleases(r.Context(), settings, category, prowlarrQuery{query, "search"})
+	if err != nil {
+		writeProwlarrError(w, err)
 		return
 	}
 
