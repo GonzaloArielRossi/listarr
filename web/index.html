@@ -169,11 +169,10 @@
     </div>
     <form id="prowlarr-query-form" class="prowlarr-query">
       <label class="sr-only" for="prowlarr-query">Prowlarr search query</label>
-      <input id="prowlarr-query" type="search" aria-describedby="prowlarr-search-help" maxlength="256" autocomplete="off" required autofocus>
+      <input id="prowlarr-query" type="search" maxlength="256" autocomplete="off" required autofocus>
       <button class="button primary" id="run-prowlarr-search" type="submit">Search</button>
     </form>
     <div id="prowlarr-presets" class="prowlarr-presets" role="group" aria-label="Quick searches"></div>
-    <p id="prowlarr-search-help" class="lookup-status">Edit the title or enter an ID such as tt0133093, tmdb:603, or tvdb:81189 for a show.</p>
     <p id="prowlarr-search-status" class="lookup-status" role="status"></p>
     <p id="prowlarr-search-error" class="notice" role="alert" hidden></p>
     <div class="tracker-scroll" id="prowlarr-table" tabindex="0" role="region" aria-label="Prowlarr results" hidden>
