@@ -8,7 +8,8 @@ const layoutButtons = [...document.querySelectorAll(".layout-switch button")];
 const displaySize = byId("display-size");
 const listError = byId("list-error");
 const searchTMDB = byId("search-tmdb");
-const titleDetails = byId("title-details");
+const titlePage = byId("title-page");
+const wishlistView = byId("wishlist-view");
 const detailsFeedback = byId("details-feedback");
 const detailsError = byId("details-error");
 const deleteButton = byId("delete-title");
@@ -44,7 +45,10 @@ const cardObserver = new IntersectionObserver((entries) => {
 let saved = [];
 let selectedTitle;
 let copyToast;
-let selectedCard;
+let titleRequest;
+let detailPath = "";
+let wishlistScroll = 0;
+let lastCard;
 let gridColumns = "6";
 let rowSize = "medium";
 let typeFilter = "";
@@ -218,7 +222,6 @@ async function loadCardMetadata(row) {
   try {
     await refreshMetadata(item);
     showCardMetadata(item, row.querySelector(".card-metadata"), row.querySelector(".card-origin"));
-    if (titleDetails.open && selectedTitle === item) showDetailLinks(item);
   } catch {
     // Keep the fields already saved with the title.
   }
@@ -228,15 +231,8 @@ function poster(item, size) {
   const frame = element("div", "poster");
   frame.setAttribute("aria-hidden", "true");
   frame.append(icon("film-strip"));
-  if (/^\/[\w-]+\.(jpe?g|png|webp)$/i.test(item.poster_path)) {
-    const image = element("img");
-    image.alt = "";
-    image.loading = "lazy";
-    image.decoding = "async";
-    image.addEventListener("error", () => image.remove(), { once: true });
-    image.src = "https://image.tmdb.org/t/p/" + size + item.poster_path;
-    frame.append(image);
-  }
+  const image = tmdbImage(item.poster_path, size);
+  if (image) frame.append(image);
   return frame;
 }
 
@@ -273,14 +269,18 @@ function card(item) {
   }
   if (row.dataset.movieId || row.dataset.metadataKey) cardObserver.observe(row);
 
-  const action = element("button", "card-action");
-  action.type = "button";
+  const action = element("a", "card-action");
+  action.href = "/title/" + keyFor(item);
   action.dataset.key = keyFor(item);
   action.title = title;
   action.setAttribute("aria-label", "Details for " + title);
-  action.setAttribute("aria-haspopup", "dialog");
-  row.addEventListener("click", () => {
-    if (!action.disabled) openDetails(item, row);
+  action.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    lastCard = action;
+    wishlistScroll = window.scrollY;
+    history.pushState({ fromWishlist: true }, "", action.href);
+    showCurrentPage(true);
   });
   cover.append(poster(item, "w342"), media, origin);
   body.append(heading, info, status);
@@ -356,20 +356,6 @@ function updateListActions() {
   const busy = changingList || pendingAdds.size > 0;
   searchTMDB.disabled = !loaded || changingList;
   deleteButton.disabled = busy;
-  for (const action of cards.querySelectorAll(".card-action")) action.disabled = busy;
-}
-
-function showDetailLinks(item) {
-  const imdb = byId("details-imdb");
-  imdb.hidden = !/^tt[0-9]+$/.test(item.imdb_id);
-  if (!imdb.hidden) imdb.href = "https://www.imdb.com/title/" + item.imdb_id + "/";
-
-  const catalog = byId("details-catalog");
-  const hasTVDB = item.media_type === "tv" && Number.isInteger(item.tvdb_id) && item.tvdb_id > 0;
-  catalog.href = hasTVDB ? "https://thetvdb.com/dereferrer/series/" + item.tvdb_id : "https://www.themoviedb.org/" + keyFor(item);
-  catalog.title = hasTVDB ? "TVDB" : "TMDB";
-  catalog.setAttribute("aria-label", catalog.title);
-  byId("details-catalog-logo").src = hasTVDB ? "/tvdb.svg" : "/tmdb.svg";
 }
 
 function updateProwlarrConnection(connection) {
@@ -402,27 +388,46 @@ function openProwlarrSearch(item) {
 
 const torrentSize = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
-function renderTorrents(results, releases) {
+function formatSize(bytes) {
+  if (!bytes) return "—";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return torrentSize.format(bytes / (1024 ** unit)) + " " + units[unit];
+}
+
+function renderTrackerResults(results, releases) {
+  const format = new Intl.NumberFormat();
+  const count = (value) => value == null ? "—" : format.format(value);
   for (const release of releases) {
-    const row = element("li");
-    const link = element("a", "prowlarr-result");
-    link.href = release.url;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    const metadata = [release.indexer];
-    if (release.size > 0) {
-      const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-      const unit = Math.min(Math.floor(Math.log(release.size) / Math.log(1024)), units.length - 1);
-      metadata.push(torrentSize.format(release.size / (1024 ** unit)) + " " + units[unit]);
+    const row = element("tr");
+    const protocol = element("td");
+    protocol.append(element("span", "badge " + (release.protocol === "torrent" ? "released" : "theatrical"), release.protocol));
+    const title = element("td", "tracker-title");
+    if (release.tracker_url) {
+      const link = element("a", "tracker-link", release.title);
+      link.href = release.tracker_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      title.append(link);
+    } else {
+      title.textContent = release.title;
+      title.title = "The indexer did not provide a tracker page.";
     }
-    if (release.seeders != null) {
-      metadata.push(release.seeders + (release.seeders === 1 ? " seeder" : " seeders"));
+    const peers = element("td");
+    if (release.seeders != null || release.leechers != null) {
+      const badge = element("span", "badge " + (release.seeders > 0 ? "released" : ""), count(release.seeders) + " / " + count(release.leechers));
+      badge.title = "Seeders / leechers";
+      peers.append(badge);
+    } else {
+      peers.textContent = "—";
     }
-    link.append(element("span", "prowlarr-result-title", release.title));
-    if (metadata.some(Boolean)) {
-      link.append(element("span", "prowlarr-result-meta", metadata.filter(Boolean).join(" · ")));
-    }
-    row.append(link);
+    const categories = element("td", "tracker-categories");
+    const names = [...new Set((release.categories || []).map(category => category.name).filter(Boolean))];
+    for (const name of names) categories.append(element("span", "badge", name));
+    if (!names.length) categories.textContent = "—";
+    row.append(protocol, element("td", "", release.age == null ? "—" : count(release.age) + (release.age === 1 ? " day" : " days")),
+      title, element("td", "", release.indexer || "—"), element("td", "", formatSize(release.size)),
+      element("td", "", count(release.grabs)), peers, categories);
     results.append(row);
   }
 }
@@ -433,18 +438,21 @@ async function searchProwlarr() {
   prowlarrRequest?.abort();
   const request = new AbortController();
   prowlarrRequest = request;
-  const params = new URLSearchParams({ q: query, kind: prowlarrKind });
+  const params = new URLSearchParams({ q: query, kind: prowlarrKind, view: "tracker" });
   const results = byId("prowlarr-results");
   const status = byId("prowlarr-search-status");
   const notice = byId("prowlarr-search-error");
   displayNotice(notice);
   results.replaceChildren();
+  const table = byId("prowlarr-table");
+  table.hidden = true;
   status.textContent = "Searching Prowlarr…";
   try {
     const releases = await api("/api/prowlarr/search?" + params, { signal: request.signal });
     if (request.signal.aborted) return;
-    renderTorrents(results, releases);
-    status.textContent = releases.length ? releases.length + (releases.length === 1 ? " torrent result" : " torrent results") : "No torrent results found.";
+    renderTrackerResults(results, releases);
+    table.hidden = !releases.length;
+    status.textContent = releases.length ? releases.length + (releases.length === 1 ? " result" : " results") : "No results found.";
   } catch (error) {
     if (request.signal.aborted) return;
     status.textContent = "";
@@ -454,60 +462,277 @@ async function searchProwlarr() {
   }
 }
 
-async function openDetails(item, row) {
-  if (titleDetails.open) return;
-  selectedTitle = item;
-  selectedCard = row;
-  byId("details-title").textContent = displayTitle(item);
-  clearTimeout(copyToast);
-  detailsFeedback.textContent = "";
-  displayNotice(detailsError);
-  showDetailLinks(item);
-  titleDetails.showModal();
-  if (item.origin_country == null || (item.media_type === "tv" && item.tvdb_id == null)) {
-    try {
-      await refreshMetadata(item);
-      showCardMetadata(item, row.querySelector(".card-metadata"), row.querySelector(".card-origin"));
-      if (titleDetails.open && selectedTitle === item) showDetailLinks(item);
-    } catch {
-      // Already-known links remain available.
-    }
+function setOptionalText(id, text) {
+  const node = byId(id);
+  node.textContent = text || "";
+  node.hidden = !text;
+}
+
+function tmdbImage(path, size) {
+  if (!/^\/[\w-]+\.(jpe?g|png|webp)$/i.test(path || "")) return null;
+  const image = element("img");
+  image.alt = "";
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.addEventListener("error", () => image.remove(), { once: true });
+  image.src = "https://image.tmdb.org/t/p/" + size + path;
+  return image;
+}
+
+function showTitleHeader(item) {
+  const name = displayTitle(item);
+  byId("details-title").textContent = name;
+  document.title = name + " · Listarr";
+  byId("details-poster").replaceChildren(poster(item, "w342"));
+  const backdrop = tmdbImage(item.backdrop_path, "w1280");
+  byId("details-backdrop").replaceChildren(...(backdrop ? [backdrop] : []));
+  const runtime = item.runtime || item.episode_run_time?.[0];
+  byId("details-summary").textContent = [
+    item.release_date?.slice(0, 4), runtime > 0 ? runtime + " min" : "",
+    item.status, ...(item.genres || []).map(genre => genre.name),
+  ].filter(Boolean).join(" · ");
+  const alternate = [item.original_title, item.title].find(value => value && value !== name);
+  setOptionalText("details-original", alternate);
+  setOptionalText("details-tagline", item.tagline);
+
+  byId("details-external").hidden = false;
+  const imdb = byId("details-imdb");
+  imdb.hidden = !/^tt[0-9]+$/.test(item.imdb_id);
+  if (!imdb.hidden) imdb.href = "https://www.imdb.com/title/" + item.imdb_id + "/";
+  byId("details-tmdb").href = "https://www.themoviedb.org/" + keyFor(item);
+  const tvdb = byId("details-tvdb");
+  tvdb.hidden = item.media_type !== "tv" || !(item.tvdb_id > 0);
+  if (!tvdb.hidden) tvdb.href = "https://thetvdb.com/dereferrer/series/" + item.tvdb_id;
+  showCopyActions(item);
+  byId("details-actions").hidden = false;
+}
+
+function showCopyActions(item) {
+  const values = [
+    ["Title", displayTitle(item)], ["TMDB ID", item.id],
+    ["TVDB ID", item.tvdb_id > 0 ? item.tvdb_id : null],
+    ["IMDb ID", /^tt[0-9]+$/.test(item.imdb_id) ? item.imdb_id : null],
+  ];
+  const actions = byId("details-copy");
+  actions.hidden = false;
+  actions.replaceChildren();
+  for (const [label, value] of values) {
+    if (value) actions.append(copyAction(label, String(value)));
   }
 }
 
-async function copyTitle() {
-  const title = displayTitle(selectedTitle);
-  displayNotice(detailsError);
+function copyAction(label, value) {
+  const button = element("button", "button secondary");
+  button.type = "button";
+  button.setAttribute("aria-label", "Copy " + label);
+  button.title = label === "Title" ? "Copy title" : "Copy " + value;
+  button.append(icon("clipboard"), document.createTextNode(label));
+  button.addEventListener("click", () => copyDetail(button, label, value));
+  return button;
+}
+
+function addFacts(list, facts) {
+  list.replaceChildren();
+  for (const [label, value] of facts) {
+    if (!value) continue;
+    const row = element("div");
+    const definition = element("dd");
+    definition.append(value);
+    row.append(element("dt", "", label), definition);
+    list.append(row);
+  }
+}
+
+const detailsDate = new Intl.DateTimeFormat(undefined, { dateStyle: "long", timeZone: "UTC" });
+const dollars = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+
+function formatDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : detailsDate.format(date);
+}
+
+function renderTitleContent(item) {
+  const names = (values, key = "name") => (values || []).map(value => value[key]).filter(Boolean).join(", ");
+  const tv = item.media_type === "tv";
+  const website = /^https?:\/\//i.test(item.homepage) ? element("a", "text-link", "Official website") : "";
+  if (website) {
+    website.href = item.homepage;
+    website.target = "_blank";
+    website.rel = "noopener noreferrer";
+  }
+  const facts = [
+    [tv ? "First aired" : "Release date", formatDate(item.release_date)],
+    ["Last aired", formatDate(item.last_air_date)],
+    ["Country of origin", (item.origin_country || []).filter(code => /^[A-Z]{2}$/.test(code)).map(code => regionNames.of(code)).join(", ")],
+    ["Original language", item.original_language ? languageName(item.original_language) : ""],
+    ["Spoken languages", names(item.spoken_languages, "english_name")],
+    ["Created by", names(item.created_by)],
+    ["Networks", names(item.networks)],
+    ["Production companies", names(item.production_companies)],
+    ["Seasons", item.number_of_seasons || ""],
+    ["Episodes", item.number_of_episodes || ""],
+    ["TMDB rating", item.vote_count > 0 ? item.vote_average.toFixed(1) + " / 10 (" + item.vote_count.toLocaleString() + " votes)" : ""],
+    ["Budget", item.budget > 0 ? dollars.format(item.budget) : ""],
+    ["Revenue", item.revenue > 0 ? dollars.format(item.revenue) : ""],
+    ["Website", website],
+  ];
+  byId("details-overview").textContent = item.overview || "No overview available.";
+  addFacts(byId("details-facts"), facts);
+  renderCast(item.cast || []);
+
+  const crew = new Map();
+  for (const { name, job } of item.crew || []) {
+    if (!name || !job) continue;
+    if (!crew.has(job)) crew.set(job, new Set());
+    crew.get(job).add(name);
+  }
+  const priority = ["Director", "Writer", "Screenplay", "Producer", "Executive Producer", "Original Music Composer", "Director of Photography"];
+  const jobs = [...new Set([...priority, ...crew.keys()])];
+  addFacts(byId("details-crew"), jobs.filter(job => crew.has(job)).map(job => [job, [...crew.get(job)].join(", ")]));
+  byId("crew-section").hidden = !crew.size;
+
+  const seasons = byId("details-seasons");
+  seasons.replaceChildren();
+  for (const season of item.seasons || []) {
+    const row = element("li", "season-card");
+    const image = tmdbImage(season.poster_path, "w185");
+    const info = element("div");
+    info.append(element("h3", "", season.name));
+    const date = [formatDate(season.air_date), season.episode_count > 0 ? season.episode_count + (season.episode_count === 1 ? " episode" : " episodes") : ""].filter(Boolean).join(" · ");
+    if (date) info.append(element("p", "title-original", date));
+    if (season.overview) info.append(element("p", "", season.overview));
+    if (image) row.append(image);
+    row.append(info);
+    seasons.append(row);
+  }
+  byId("seasons-section").hidden = !seasons.childElementCount;
+  byId("details-content").hidden = false;
+}
+
+function renderCast(cast) {
+  const list = byId("details-cast");
+  const showAll = byId("show-all-cast");
+  list.replaceChildren();
+  byId("cast-section").hidden = !cast.length;
+  const addCast = (members) => {
+    for (const member of members) {
+      const row = element("li");
+      const portrait = element("div", "cast-portrait");
+      const image = tmdbImage(member.profile_path, "w185");
+      if (image) portrait.append(image);
+      const roles = member.roles?.map(role => role.character).filter(Boolean).join(", ") || member.character;
+      row.append(portrait, element("strong", "", member.name), element("span", "", roles));
+      list.append(row);
+    }
+  };
+  addCast(cast.slice(0, 12));
+  showAll.hidden = cast.length <= 12;
+  showAll.textContent = "Show all " + cast.length + " cast members";
+  showAll.onclick = () => {
+    addCast(cast.slice(12));
+    showAll.hidden = true;
+    const nextCast = list.children[12];
+    nextCast.tabIndex = -1;
+    nextCast.focus();
+  };
+}
+
+async function copyDetail(button, label, value) {
+  let copied = false;
   try {
-    await navigator.clipboard.writeText(title);
+    await navigator.clipboard.writeText(value);
+    copied = true;
   } catch {
     const field = element("textarea", "sr-only");
-    field.value = title;
+    field.value = value;
     field.readOnly = true;
-    titleDetails.append(field);
+    titlePage.append(field);
     field.select();
-    let copied = false;
     try {
       copied = document.execCommand("copy");
     } catch {
-      // The title can still be selected in the dialog.
+      // Announce that the clipboard is unavailable.
     }
     field.remove();
-    byId("copy-title").focus();
-    if (!copied) {
-      displayNotice(detailsError, "Copy unavailable. Select and copy the title.");
-      return;
-    }
+    button.focus();
   }
+  if (titlePage.hidden) return;
   clearTimeout(copyToast);
-  detailsFeedback.textContent = "Title copied.";
+  detailsFeedback.textContent = copied ? label + " copied." : "Clipboard unavailable.";
   copyToast = setTimeout(() => { detailsFeedback.textContent = ""; }, 2600);
 }
 
-async function deleteTitle(item, row) {
+async function showCurrentPage(focus = false) {
+  const path = location.pathname;
+  if (path === detailPath) return;
+  detailPath = path;
+  titleRequest?.abort();
+  if (prowlarrSearchDialog.open) prowlarrSearchDialog.close();
+  const match = /^\/title\/(movie|tv)\/(\d+)$/.exec(path);
+  const key = match ? match[1] + "/" + match[2] : "";
+  const isTitle = path.startsWith("/title/");
+  titlePage.hidden = !isTitle;
+  wishlistView.hidden = isTitle;
+  selectedTitle = undefined;
+  if (!isTitle) {
+    document.title = "Listarr";
+    if (focus) {
+      (lastCard?.isConnected ? lastCard : titleFilter).focus({ preventScroll: true });
+      window.scrollTo(0, wishlistScroll);
+    }
+    return;
+  }
+
+  const loading = byId("details-loading");
+  displayNotice(detailsError);
+  clearTimeout(copyToast);
+  detailsFeedback.textContent = "";
+  byId("details-title").textContent = "Title details";
+  byId("details-summary").textContent = "";
+  byId("details-poster").replaceChildren();
+  byId("details-backdrop").replaceChildren();
+  for (const id of ["details-content", "details-external", "details-copy", "details-actions", "details-original", "details-tagline", "filmaffinity-status"]) {
+    byId(id).hidden = true;
+  }
+  document.title = "Title details · Listarr";
+  if (focus) {
+    window.scrollTo(0, 0);
+    byId("details-title").focus({ preventScroll: true });
+  }
+  if (!key) {
+    loading.textContent = "";
+    displayNotice(detailsError, "This title page does not exist.");
+    return;
+  }
+  selectedTitle = saved.find(item => keyFor(item) === key);
+  if (selectedTitle) showTitleHeader(selectedTitle);
+  loading.textContent = "Loading title details…";
+  const request = new AbortController();
+  titleRequest = request;
+  const options = { signal: request.signal };
+  const endpoint = "/api/wishlist/" + key;
+  const affinity = api(endpoint + "/filmaffinity", options).then(({ id }) => ({ id }), () => ({ failed: true }));
+  try {
+    const item = await api(endpoint + "/details", options);
+    if (request.signal.aborted) return;
+    selectedTitle = item;
+    showTitleHeader(item);
+    renderTitleContent(item);
+  } catch (error) {
+    if (!request.signal.aborted) displayNotice(detailsError, error.message);
+  } finally {
+    if (!request.signal.aborted) loading.textContent = "";
+  }
+  const result = await affinity;
+  if (request.signal.aborted || !selectedTitle) return;
+  if (result.id) byId("details-copy").append(copyAction("FilmAffinity ID", result.id));
+  else setOptionalText("filmaffinity-status", result.failed ? "FilmAffinity lookup temporarily unavailable." : "FilmAffinity ID unavailable.");
+}
+
+async function deleteTitle(item) {
   if (changingList || pendingAdds.size) return;
   const key = keyFor(item);
-  const nextKey = row.nextElementSibling?.querySelector(".card-action")?.dataset.key;
   changingList = true;
   updateListActions();
   displayNotice(detailsError);
@@ -515,20 +740,24 @@ async function deleteTitle(item, row) {
   try {
     await api("/api/wishlist/" + key, { method: "DELETE" });
     saved = saved.filter(other => keyFor(other) !== key);
-    if (titleDetails.open && selectedTitle === item) titleDetails.close();
-    changingList = false;
     updateLanguages();
     renderList();
-    if (!titleDetails.open && !lookup.open && document.activeElement === document.body) {
-      const actions = [...cards.querySelectorAll(".card-action")];
-      (actions.find(button => button.dataset.key === nextKey) || actions[0] || titleFilter).focus();
-    }
+    if (selectedTitle && keyFor(selectedTitle) === key) returnToWishlist();
     byId("feedback").textContent = "Deleted " + displayTitle(item) + ".";
   } catch (error) {
-    displayNotice(titleDetails.open && selectedTitle === item ? detailsError : listError, error.message);
+    displayNotice(!titlePage.hidden ? detailsError : listError, error.message);
   } finally {
     changingList = false;
     updateListActions();
+  }
+}
+
+function returnToWishlist() {
+  if (history.state?.fromWishlist) {
+    history.back();
+  } else {
+    history.replaceState(null, "", "/");
+    showCurrentPage(true);
   }
 }
 
@@ -658,7 +887,12 @@ byId("reset-filters").addEventListener("click", () => {
   setTypeFilter("");
   titleFilter.focus();
 });
-byId("copy-title").addEventListener("click", copyTitle);
+window.addEventListener("popstate", () => showCurrentPage(true));
+byId("back-to-wishlist").addEventListener("click", (event) => {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  returnToWishlist();
+});
 prowlarrNavbarButton.addEventListener("click", () => openProwlarrSettings());
 byId("search-prowlarr").addEventListener("click", () => openProwlarrSearch(selectedTitle));
 byId("prowlarr-query-form").addEventListener("submit", (event) => {
@@ -687,7 +921,7 @@ byId("prowlarr-connection").addEventListener("submit", async (event) => {
     if (prowlarrSettingsDialog.open) {
       const item = waitingForProwlarr;
       prowlarrSettingsDialog.close();
-      if (item && titleDetails.open) openProwlarrSearch(item);
+      if (item && selectedTitle && keyFor(item) === keyFor(selectedTitle)) openProwlarrSearch(selectedTitle);
     }
   } catch (error) {
     displayNotice(notice, error.message);
@@ -697,8 +931,8 @@ byId("prowlarr-connection").addEventListener("submit", async (event) => {
 });
 deleteButton.addEventListener("click", () => {
   const item = selectedTitle;
-  const row = selectedCard;
-  confirmAction("Delete this title?", "“" + displayTitle(item) + "” will be permanently deleted from your wishlist.", "Delete title", () => deleteTitle(item, row));
+  if (!item) return;
+  confirmAction("Delete this title?", "“" + displayTitle(item) + "” will be permanently deleted from your wishlist.", "Delete title", () => deleteTitle(item));
 });
 confirmDialog.addEventListener("close", () => {
   const action = confirmedAction;
@@ -720,5 +954,9 @@ async function loadWishlist() {
 }
 
 loadDisplayOptions();
-loadWishlist();
+if (location.pathname.startsWith("/title/")) {
+  wishlistView.hidden = true;
+  titlePage.hidden = false;
+}
+loadWishlist().then(() => showCurrentPage());
 api("/api/prowlarr/settings").then(updateProwlarrConnection).catch(() => {});

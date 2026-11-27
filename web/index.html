@@ -15,7 +15,7 @@
       <button class="button secondary" id="open-prowlarr" type="button">Connect Prowlarr</button>
     </header>
 
-    <main>
+    <main id="wishlist-view">
       <h1 id="view-title" class="sr-only">Wishlist</h1>
 
       <section aria-labelledby="view-title">
@@ -69,6 +69,59 @@
       </section>
     </main>
 
+    <main id="title-page" aria-labelledby="details-title" hidden>
+      <a class="back-link" id="back-to-wishlist" href="/">← Back to wishlist</a>
+      <div id="title-hero" class="title-hero">
+        <div id="details-backdrop" class="title-backdrop" aria-hidden="true"></div>
+        <div id="details-poster" class="title-poster"></div>
+        <div class="title-intro">
+          <p id="details-summary" class="title-summary"></p>
+          <h1 id="details-title" tabindex="-1">Title details</h1>
+          <p id="details-original" class="title-original" hidden></p>
+          <p id="details-tagline" class="title-tagline" hidden></p>
+          <div id="details-external" class="title-links" aria-label="External links" hidden>
+            <a class="button secondary" id="details-imdb" target="_blank" rel="noopener noreferrer" aria-label="IMDb" hidden><img class="service-logo" src="/imdb.svg" alt=""></a>
+            <a class="button secondary" id="details-tmdb" target="_blank" rel="noopener noreferrer" aria-label="TMDB"><img class="service-logo" src="/tmdb.svg" alt=""></a>
+            <a class="button secondary" id="details-tvdb" target="_blank" rel="noopener noreferrer" aria-label="TVDB" hidden><img class="service-logo" src="/tvdb.svg" alt=""></a>
+          </div>
+          <div id="details-copy" class="title-copy" role="group" aria-label="Copy title or ID" hidden></div>
+          <p id="filmaffinity-status" class="title-original" role="status" hidden></p>
+          <div class="title-tools" id="details-actions" hidden>
+            <button class="button primary" id="search-prowlarr" type="button">Search Prowlarr</button>
+            <button class="button danger" id="delete-title" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#trash"></use></svg>Delete title</button>
+          </div>
+        </div>
+      </div>
+      <p id="details-feedback" class="toast" role="status"></p>
+      <p id="details-error" class="notice" role="alert" hidden></p>
+      <p id="details-loading" class="lookup-status" role="status"></p>
+      <div id="details-content" class="title-content" hidden>
+        <div class="title-overview">
+          <section aria-labelledby="overview-heading">
+            <h2 id="overview-heading">Overview</h2>
+            <p id="details-overview"></p>
+          </section>
+          <section aria-labelledby="facts-heading">
+            <h2 id="facts-heading">Details</h2>
+            <dl id="details-facts"></dl>
+          </section>
+        </div>
+        <section aria-labelledby="cast-heading" id="cast-section" hidden>
+          <h2 id="cast-heading">Cast and characters</h2>
+          <ul class="cast-grid" id="details-cast"></ul>
+          <button class="button secondary" id="show-all-cast" type="button" hidden></button>
+        </section>
+        <section aria-labelledby="crew-heading" id="crew-section" hidden>
+          <h2 id="crew-heading">Crew</h2>
+          <dl id="details-crew"></dl>
+        </section>
+        <section aria-labelledby="seasons-heading" id="seasons-section" hidden>
+          <h2 id="seasons-heading">Seasons</h2>
+          <ul class="season-grid" id="details-seasons"></ul>
+        </section>
+      </div>
+    </main>
+
     <footer aria-label="Credits">
       <a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer"><img src="/tmdb.svg" alt="TMDB" width="60" height="16"></a>
       <p>This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability provided by <a class="credit-link" href="https://www.justwatch.com/" target="_blank" rel="noopener noreferrer">JustWatch</a>.</p>
@@ -90,25 +143,7 @@
     </div>
   </dialog>
 
-  <dialog id="title-details" class="title-details" aria-labelledby="details-title">
-    <div class="dialog-heading">
-      <h2 id="details-title"></h2>
-      <form method="dialog"><button class="icon-button" type="submit" aria-label="Close title details" autofocus><svg class="icon" aria-hidden="true"><use href="/icons.svg#x"></use></svg></button></form>
-    </div>
-    <div class="detail-links">
-      <a class="button secondary" id="details-imdb" target="_blank" rel="noopener noreferrer" aria-label="IMDb" title="IMDb" hidden><img class="service-logo" src="/imdb.svg" alt=""></a>
-      <a class="button secondary" id="details-catalog" target="_blank" rel="noopener noreferrer"><img class="service-logo" id="details-catalog-logo" src="/tmdb.svg" alt=""></a>
-      <button class="button secondary" id="copy-title" type="button" aria-label="Copy title" title="Copy title"><svg class="icon" aria-hidden="true"><use href="/icons.svg#clipboard"></use></svg></button>
-    </div>
-    <p id="details-feedback" class="toast" role="status"></p>
-    <p id="details-error" class="notice" role="alert" hidden></p>
-    <button class="button secondary prowlarr-action" id="search-prowlarr" type="button">Search Prowlarr</button>
-    <div class="detail-actions">
-      <button class="button danger" id="delete-title" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#trash"></use></svg>Delete title</button>
-    </div>
-  </dialog>
-
-  <dialog id="prowlarr-settings" class="title-details" aria-labelledby="prowlarr-settings-title">
+  <dialog id="prowlarr-settings" class="settings-dialog" aria-labelledby="prowlarr-settings-title">
     <div class="dialog-heading">
       <h2 id="prowlarr-settings-title">Connect Prowlarr</h2>
       <form method="dialog"><button class="icon-button" type="submit" aria-label="Close Prowlarr settings"><svg class="icon" aria-hidden="true"><use href="/icons.svg#x"></use></svg></button></form>
@@ -132,13 +167,20 @@
       <form method="dialog"><button class="icon-button" type="submit" aria-label="Close Prowlarr search"><svg class="icon" aria-hidden="true"><use href="/icons.svg#x"></use></svg></button></form>
     </div>
     <form id="prowlarr-query-form" class="prowlarr-query">
-      <label class="sr-only" for="prowlarr-query">Torrent search query</label>
+      <label class="sr-only" for="prowlarr-query">Prowlarr search query</label>
       <input id="prowlarr-query" type="search" maxlength="256" autocomplete="off" required autofocus>
       <button class="button primary" id="run-prowlarr-search" type="submit">Search</button>
     </form>
     <p id="prowlarr-search-status" class="lookup-status" role="status"></p>
     <p id="prowlarr-search-error" class="notice" role="alert" hidden></p>
-    <ul id="prowlarr-results" class="results"></ul>
+    <div class="tracker-scroll" id="prowlarr-table" tabindex="0" role="region" aria-label="Prowlarr results" hidden>
+      <table class="tracker-results">
+        <thead>
+          <tr><th scope="col">Protocol</th><th scope="col">Age</th><th scope="col">Title</th><th scope="col">Indexer</th><th scope="col">Size</th><th scope="col">Grabs</th><th scope="col">Peers</th><th scope="col">Category</th></tr>
+        </thead>
+        <tbody id="prowlarr-results"></tbody>
+      </table>
+    </div>
   </dialog>
 
   <dialog id="confirm" class="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-detail">

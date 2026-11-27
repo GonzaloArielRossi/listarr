@@ -185,18 +185,27 @@ type app struct {
 	tmdb     tmdb
 	region   string
 	prowlarr *prowlarr
+	wikidata *http.Client
 }
 
 func (a app) handler() http.Handler {
 	web, _ := fs.Sub(assets, "web")
 	mux := http.NewServeMux()
-	mux.Handle("GET /", http.FileServer(http.FS(web)))
+	files := http.FileServer(http.FS(web))
+	mux.Handle("GET /", files)
+	mux.HandleFunc("GET /title/{kind}/{id}", func(w http.ResponseWriter, r *http.Request) {
+		page := r.Clone(r.Context())
+		page.URL.Path = "/"
+		files.ServeHTTP(w, page)
+	})
 	mux.HandleFunc("GET /api/wishlist", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.library.snapshot())
 	})
 	mux.HandleFunc("GET /api/search", a.search)
 	mux.HandleFunc("GET /api/wishlist/movie/{id}/availability", a.movieAvailability)
 	mux.HandleFunc("GET /api/wishlist/{kind}/{id}/metadata", a.titleMetadata)
+	mux.HandleFunc("GET /api/wishlist/{kind}/{id}/details", a.titlePage)
+	mux.HandleFunc("GET /api/wishlist/{kind}/{id}/filmaffinity", a.titleFilmAffinity)
 	mux.HandleFunc("POST /api/wishlist", a.add)
 	mux.HandleFunc("DELETE /api/wishlist/{kind}/{id}", a.deleteTitle)
 	if a.prowlarr != nil {
@@ -214,23 +223,57 @@ func (a app) handler() http.Handler {
 	})
 }
 
-func (a app) titleMetadata(w http.ResponseWriter, r *http.Request) {
+func (a app) savedTitle(w http.ResponseWriter, r *http.Request) (storedTitle, bool) {
 	kind := r.PathValue("kind")
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id < 1 || id > maxTMDBID || !validKind(kind) {
 		writeError(w, http.StatusBadRequest, "Select a valid title.")
-		return
+		return storedTitle{}, false
 	}
 	item, found := a.library.find(kind, id)
 	if !found || item.Archived {
 		writeError(w, http.StatusNotFound, "This title is no longer in the library.")
+		return storedTitle{}, false
+	}
+	return item, true
+}
+
+func (a app) titlePage(w http.ResponseWriter, r *http.Request) {
+	item, ok := a.savedTitle(w, r)
+	if !ok {
+		return
+	}
+	details, err := a.tmdb.fullDetails(r.Context(), item.title)
+	if err != nil {
+		writeTMDBError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, details)
+}
+
+func (a app) titleFilmAffinity(w http.ResponseWriter, r *http.Request) {
+	item, ok := a.savedTitle(w, r)
+	if !ok {
+		return
+	}
+	id, err := lookupFilmAffinity(r.Context(), a.wikidata, item.title)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "FilmAffinity lookup is temporarily unavailable.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id})
+}
+
+func (a app) titleMetadata(w http.ResponseWriter, r *http.Request) {
+	item, ok := a.savedTitle(w, r)
+	if !ok {
 		return
 	}
 	if item.hasMetadata() {
 		writeJSON(w, http.StatusOK, item.title)
 		return
 	}
-	details, err := a.tmdb.details(r.Context(), kind, id)
+	details, err := a.tmdb.details(r.Context(), item.Kind, item.ID)
 	if err != nil {
 		writeTMDBError(w, err)
 		return
@@ -391,6 +434,7 @@ func main() {
 		library:  list,
 		region:   region,
 		prowlarr: prowlarr,
+		wikidata: &http.Client{Timeout: 5 * time.Second},
 		tmdb: tmdb{
 			base:   "https://api.themoviedb.org/3",
 			apiKey: strings.TrimSpace(os.Getenv("TMDB_API_KEY")),

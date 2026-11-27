@@ -28,7 +28,7 @@ The Compose image includes Go and Air to rebuild the app from the read-only chec
 - Search results and saved cards use the original title for English, Spanish, Italian, and French productions. Other productions use the English title when TMDB has one.
 - Use **Films** or **Shows** to filter by type alongside title and original language. Select the active button again to show both types.
 - Switch between **Grid** and **List** above the results. The adjacent menu sets 4, 5, or 6 cards per row in Grid, or Compact, Medium, and Large rows in List. Listarr remembers both settings in your browser.
-- Open a card for IMDb, TMDB, and available TVDB links, or to copy its title. Select **Delete title** and confirm to permanently delete it.
+- Open a card to see the title page with synopsis, cast and characters, credits, and TV seasons. Use the IMDb, TMDB, and available TVDB links or copy the title and any available IDs. Listarr looks up FilmAffinity IDs in Wikidata. Select **Delete title** and confirm to permanently delete it.
 
 Compose stores the list in `./listarr-data/wishlist.json` on the host. Startup assigns the mounted directory and existing data files to `PUID:PGID`, then runs the app as that user. The data survives a rebuild or `docker compose down`. To back up your wishlist, copy `./listarr-data/wishlist.json`.
 
@@ -36,7 +36,7 @@ Compose stores the list in `./listarr-data/wishlist.json` on the host. Startup a
 
 Select **Connect Prowlarr** in the navbar. Enter the base URL that the Listarr server can reach and the API key from **Settings → General** in Prowlarr. For example, use `http://prowlarr:9696` if both containers share a Docker network and Prowlarr is reachable by that service name.
 
-Open any saved title and select **Search Prowlarr**. The search starts with the card title and you can edit the query. Select a result to open its torrent or magnet link in a new tab. Listarr keeps the connection settings in `./listarr-data/prowlarr.json` when using Compose.
+Open any saved title and select **Search Prowlarr**. The search starts with the card title and you can edit the query. The results table shows protocol, age, indexer, size, grabs, peers, and categories. Select a linked title to open the tracker page in a new tab. Listarr keeps the connection settings in `./listarr-data/prowlarr.json` when using Compose.
 
 ## Run from source
 

@@ -294,3 +294,152 @@ func writeTMDBError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadGateway, "TMDB is temporarily unavailable. Try again in a moment.")
 	}
 }
+
+type namedCredit struct {
+	Name string `json:"name"`
+}
+
+type castCredit struct {
+	Name        string `json:"name"`
+	Character   string `json:"character"`
+	ProfilePath string `json:"profile_path"`
+	Roles       []struct {
+		Character string `json:"character"`
+	} `json:"roles,omitempty"`
+}
+
+type titleFacts struct {
+	Overview            string        `json:"overview"`
+	Tagline             string        `json:"tagline"`
+	BackdropPath        string        `json:"backdrop_path"`
+	Homepage            string        `json:"homepage"`
+	Genres              []namedCredit `json:"genres"`
+	ProductionCompanies []namedCredit `json:"production_companies"`
+	SpokenLanguages     []struct {
+		Name string `json:"english_name"`
+	} `json:"spoken_languages"`
+	VoteAverage      float64       `json:"vote_average"`
+	VoteCount        int           `json:"vote_count"`
+	Runtime          int           `json:"runtime"`
+	EpisodeRuntime   []int         `json:"episode_run_time"`
+	Budget           int64         `json:"budget"`
+	Revenue          int64         `json:"revenue"`
+	LastAirDate      string        `json:"last_air_date"`
+	NumberOfSeasons  int           `json:"number_of_seasons"`
+	NumberOfEpisodes int           `json:"number_of_episodes"`
+	Networks         []namedCredit `json:"networks"`
+	CreatedBy        []namedCredit `json:"created_by"`
+	Seasons          []struct {
+		Name         string `json:"name"`
+		Overview     string `json:"overview"`
+		PosterPath   string `json:"poster_path"`
+		AirDate      string `json:"air_date"`
+		EpisodeCount int    `json:"episode_count"`
+		Number       int    `json:"season_number"`
+	} `json:"seasons"`
+}
+
+type titlePage struct {
+	title
+	titleFacts
+	Cast []castCredit `json:"cast"`
+	Crew []struct {
+		Name string `json:"name"`
+		Job  string `json:"job"`
+	} `json:"crew"`
+}
+
+func (t tmdb) fullDetails(ctx context.Context, item title) (titlePage, error) {
+	var remote struct {
+		remoteTitle
+		titleFacts
+		Credits struct {
+			Cast []castCredit
+			Crew []struct {
+				Name string `json:"name"`
+				Job  string `json:"job"`
+			}
+		}
+		AggregateCredits struct {
+			Cast []castCredit
+		} `json:"aggregate_credits"`
+	}
+	appendToResponse := "external_ids,credits"
+	if item.Kind == "tv" {
+		appendToResponse += ",aggregate_credits"
+	}
+	if err := t.fetch(ctx, "/"+item.Kind+"/"+strconv.Itoa(item.ID), url.Values{
+		"append_to_response": {appendToResponse},
+	}, &remote); err != nil {
+		return titlePage{}, err
+	}
+	if remote.ID != item.ID {
+		return titlePage{}, errors.New("TMDB returned an unexpected title ID")
+	}
+	fresh := remote.toTitle(item.Kind)
+	if !imdbPattern.MatchString(fresh.IMDbID) && imdbPattern.MatchString(remote.ExternalIDs.IMDbID) {
+		fresh.IMDbID = remote.ExternalIDs.IMDbID
+	}
+	if !imdbPattern.MatchString(fresh.IMDbID) {
+		fresh.IMDbID = item.IMDbID
+	}
+	if len(fresh.OriginCountries) == 0 {
+		fresh.OriginCountries = item.OriginCountries
+	}
+	if item.Kind == "tv" {
+		fresh.TVDBID = item.TVDBID
+		if remote.ExternalIDs.TVDBID > 0 {
+			fresh.TVDBID = &remote.ExternalIDs.TVDBID
+		}
+	}
+	cast := remote.Credits.Cast
+	if len(remote.AggregateCredits.Cast) > 0 {
+		cast = remote.AggregateCredits.Cast
+	}
+	return titlePage{fresh, remote.titleFacts, cast, remote.Credits.Crew}, nil
+}
+
+var filmAffinityID = regexp.MustCompile(`^[0-9]{6,7}$`)
+
+func lookupFilmAffinity(ctx context.Context, client *http.Client, item title) (string, error) {
+	property := "P4947"
+	if item.Kind == "tv" {
+		property = "P4983"
+	}
+	matches := fmt.Sprintf("{ ?work wdt:%s %q }", property, strconv.Itoa(item.ID))
+	if imdbPattern.MatchString(item.IMDbID) {
+		matches += fmt.Sprintf(" UNION { ?work wdt:P345 %q }", item.IMDbID)
+	}
+	params := url.Values{
+		"query":  {"SELECT DISTINCT ?id WHERE { " + matches + " ?work wdt:P480 ?id . } LIMIT 2"},
+		"format": {"json"},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://query.wikidata.org/sparql?"+params.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/sparql-results+json")
+	req.Header.Set("User-Agent", "Listarr/1.0 (https://github.com/GonzaloArielRossi/listarr)")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Wikidata returned HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Results struct {
+			Bindings []struct {
+				ID struct{ Value string }
+			}
+		}
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result); err != nil {
+		return "", err
+	}
+	if bindings := result.Results.Bindings; len(bindings) == 1 && filmAffinityID.MatchString(bindings[0].ID.Value) {
+		return bindings[0].ID.Value, nil
+	}
+	return "", nil
+}

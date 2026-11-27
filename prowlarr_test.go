@@ -47,12 +47,12 @@ func TestProwlarrManualSearch(t *testing.T) {
 				t.Fatalf("unexpected Prowlarr search parameters: %s", req.URL.RawQuery)
 			}
 			return response(http.StatusOK, `[
-			  {"title":"Fixture film 1080p","indexer":"Fixture","size":1073741824,"seeders":8,"protocol":"torrent","downloadUrl":"https://proxied.test/arr/9/download?apikey=`+key+`&link=opaque-torrent&file=Fixture+film"},
-			  {"title":"Fixture film 720p","seeders":0,"protocol":"torrent","magnetUrl":"http://prowlarr.test:9696/arr/9/download?apikey=`+key+`&link=opaque-magnet"},
+			  {"title":"Fixture film 1080p","indexer":"Fixture","size":1073741824,"seeders":8,"leechers":2,"age":96,"grabs":45,"categories":[{"id":2000,"name":"Movies"}],"infoUrl":"https://tracker.test/movies/42","protocol":"torrent","downloadUrl":"https://proxied.test/arr/9/download?apikey=`+key+`&link=opaque-torrent&file=Fixture+film"},
+			  {"title":"Fixture film 720p","seeders":0,"infoUrl":"javascript:alert(1)","commentUrl":"https://tracker.test/movies/43","protocol":"torrent","magnetUrl":"http://prowlarr.test:9696/arr/9/download?apikey=`+key+`&link=opaque-magnet"},
 			  {"title":"Direct magnet","protocol":"torrent","magnetUrl":"`+magnet+`"},
 			  {"title":"Usenet release","protocol":"usenet","downloadUrl":"https://indexer.test/fixture"},
 			  {"title":"Invalid link","protocol":"torrent","downloadUrl":"javascript:alert(1)"},
-			  {"title":"Credential in link","protocol":"torrent","downloadUrl":"https://indexer.test/fixture?api%6bey=secret"}
+			  {"title":"Credential in link","infoUrl":"https://indexer.test/fixture?api%6bey=secret","protocol":"torrent","downloadUrl":"https://indexer.test/fixture?api%6bey=secret"}
 			]`), nil
 		case "/arr/9/download":
 			if query.Get("apikey") != key {
@@ -123,6 +123,17 @@ func TestProwlarrManualSearch(t *testing.T) {
 		if !strings.HasPrefix(release.URL, "/api/prowlarr/download/") || strings.Contains(release.URL, "opaque-") {
 			t.Fatalf("unexpected public download link: %s", release.URL)
 		}
+	}
+	tracker := call("GET", "/api/prowlarr/search?kind=movie&q=Mi+pel%C3%ADcula&view=tracker", "", http.StatusOK)
+	var rows []trackerResult
+	if err := json.Unmarshal(tracker.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 6 || rows[0].TrackerURL != "https://tracker.test/movies/42" || rows[0].Age == nil || *rows[0].Age != 96 ||
+		rows[0].Grabs == nil || *rows[0].Grabs != 45 || len(rows[0].Categories) != 1 || rows[0].Categories[0].Name != "Movies" ||
+		rows[0].Leechers == nil || *rows[0].Leechers != 2 || rows[1].TrackerURL != "https://tracker.test/movies/43" ||
+		rows[3].Protocol != "usenet" || rows[5].TrackerURL != "" || strings.Contains(tracker.Body.String(), "opaque-") {
+		t.Fatalf("unexpected tracker results: %s", tracker.Body.String())
 	}
 	file := call("GET", results[0].URL, "", http.StatusOK)
 	if file.Body.String() != torrent || file.Header().Get("Content-Type") != "application/x-bittorrent" || !strings.HasPrefix(file.Header().Get("Content-Disposition"), "attachment") {

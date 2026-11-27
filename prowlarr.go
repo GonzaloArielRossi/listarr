@@ -186,6 +186,21 @@ type torrentResult struct {
 	URL     string `json:"url"`
 }
 
+type trackerResult struct {
+	Title      string `json:"title"`
+	Indexer    string `json:"indexer"`
+	Size       int64  `json:"size"`
+	Seeders    *int   `json:"seeders"`
+	Leechers   *int   `json:"leechers"`
+	Age        *int   `json:"age"`
+	Grabs      *int   `json:"grabs"`
+	Protocol   string `json:"protocol"`
+	TrackerURL string `json:"tracker_url"`
+	Categories []struct {
+		Name string `json:"name"`
+	} `json:"categories"`
+}
+
 func (p *prowlarr) search(w http.ResponseWriter, r *http.Request) {
 	settings := p.snapshot()
 	if settings.APIKey == "" {
@@ -204,8 +219,9 @@ func (p *prowlarr) search(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(prowlarrTimeout + 5*time.Second))
 	var releases []struct {
-		torrentResult
-		Protocol    string
+		trackerResult
+		InfoURL     string
+		CommentURL  string
 		MagnetURL   string
 		DownloadURL string
 	}
@@ -217,6 +233,26 @@ func (p *prowlarr) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Get("view") == "tracker" {
+		results := []trackerResult{}
+		for _, release := range releases {
+			if release.Title == "" || (release.Protocol != "torrent" && release.Protocol != "usenet") {
+				continue
+			}
+			result := release.trackerResult
+			result.TrackerURL = trackerPageURL(release.InfoURL, settings.APIKey)
+			if result.TrackerURL == "" {
+				result.TrackerURL = trackerPageURL(release.CommentURL, settings.APIKey)
+			}
+			results = append(results, result)
+			if len(results) == prowlarrResultLimit {
+				break
+			}
+		}
+		writeJSON(w, http.StatusOK, results)
+		return
+	}
+
 	results := []torrentResult{}
 	base, _ := url.Parse(settings.URL)
 	expires := time.Now().Add(30 * time.Minute)
@@ -225,7 +261,7 @@ func (p *prowlarr) search(w http.ResponseWriter, r *http.Request) {
 		if release.Protocol != "torrent" || release.Title == "" {
 			continue
 		}
-		result := release.torrentResult
+		result := torrentResult{Title: release.Title, Indexer: release.Indexer, Size: release.Size, Seeders: release.Seeders}
 		for _, raw := range []string{release.MagnetURL, release.DownloadURL} {
 			if target, err := url.Parse(raw); err == nil {
 				path := strings.TrimPrefix(target.Path, strings.TrimRight(base.Path, "/"))
@@ -271,20 +307,37 @@ func (p *prowlarr) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-func torrentLink(raw, apiKey string) string {
+func safeProwlarrURL(raw, apiKey string) *url.URL {
 	target, err := url.Parse(raw)
-	if err != nil || target.User != nil || strings.Contains(raw, apiKey) {
-		return ""
+	if err != nil || target.User != nil || strings.Contains(raw, apiKey) ||
+		strings.Contains(target.Path, apiKey) || strings.Contains(target.Fragment, apiKey) {
+		return nil
 	}
 	for key, values := range target.Query() {
 		if strings.EqualFold(key, "apikey") {
-			return ""
+			return nil
 		}
 		for _, value := range values {
 			if strings.Contains(value, apiKey) {
-				return ""
+				return nil
 			}
 		}
+	}
+	return target
+}
+
+func trackerPageURL(raw, apiKey string) string {
+	target := safeProwlarrURL(raw, apiKey)
+	if target != nil && (target.Scheme == "http" || target.Scheme == "https") && target.Hostname() != "" {
+		return target.String()
+	}
+	return ""
+}
+
+func torrentLink(raw, apiKey string) string {
+	target := safeProwlarrURL(raw, apiKey)
+	if target == nil {
+		return ""
 	}
 	if target.Scheme == "magnet" {
 		if hash := target.Query().Get("xt"); strings.HasPrefix(hash, "urn:btih:") || strings.HasPrefix(hash, "urn:btmh:") {
