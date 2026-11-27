@@ -220,4 +220,8 @@ func TestProwlarrTitleAndIDSearch(t *testing.T) {
 	if len(requests) != 0 {
 		t.Fatal("invalid IDs reached Prowlarr")
 	}
+	get("kind=movie&q=tt0133093&match=title", http.StatusOK)
+	if len(requests) != 1 || <-requests != [3]string{"tt0133093", "search", "2000"} {
+		t.Fatal("a title preset must use a text query even when it resembles an ID")
+	}
 }

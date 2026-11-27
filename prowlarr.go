@@ -229,6 +229,9 @@ func validProwlarrID(provider, value string) bool {
 }
 
 func trackerQueries(kind, term string, params url.Values) ([]prowlarrQuery, bool) {
+	if params.Get("match") == "title" {
+		return []prowlarrQuery{{term, "search"}}, true
+	}
 	mode := "movie"
 	if kind == "tv" {
 		mode = "tvsearch"

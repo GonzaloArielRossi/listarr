@@ -36,7 +36,7 @@ Compose stores the list in `./listarr-data/wishlist.json` on the host. Startup a
 
 Select **Connect Prowlarr** in the navbar. Enter the base URL that the Listarr server can reach and the API key from **Settings → General** in Prowlarr. For example, use `http://prowlarr:9696` if both containers share a Docker network and Prowlarr is reachable by that service name.
 
-Open any saved title and select **Search Prowlarr**. The default search checks the original and English titles and the available IMDb, TMDB, and TVDB IDs. Listarr merges duplicate releases across searches. ID support varies by indexer. Edit the query to search one title or enter an ID such as `tt0133093`, `tmdb:603`, or `tvdb:81189` for a show. The results table shows protocol, age, indexer, size, grabs, peers, and categories. Select a linked title to open the tracker page in a new tab. Listarr keeps the connection settings in `./listarr-data/prowlarr.json` when using Compose.
+Open any saved title and select **Search Prowlarr**. The dialog starts with a search for the displayed title. The quick-search buttons run the displayed or alternate title, IMDb ID, TMDB ID, or TVDB ID when available. ID support varies by indexer. Edit the query to search one title or enter an ID such as `tt0133093`, `tmdb:603`, or `tvdb:81189` for a show. The results table shows protocol, age, indexer, size, grabs, peers, and categories. Select a linked title to open the tracker page in a new tab. Listarr keeps the connection settings in `./listarr-data/prowlarr.json` when using Compose.
 
 ## Run from source
 

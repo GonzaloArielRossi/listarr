@@ -382,8 +382,38 @@ function openProwlarrSearch(item) {
   }
   prowlarrItem = item;
   prowlarrQuery.value = displayTitle(item);
+  renderProwlarrPresets(item);
   prowlarrSearchDialog.showModal();
-  searchProwlarr();
+  searchProwlarr(true);
+}
+
+function renderProwlarrPresets(item) {
+  const presets = byId("prowlarr-presets");
+  const focusedQuery = presets.contains(document.activeElement) ? document.activeElement.dataset.query : undefined;
+  const title = displayTitle(item);
+  const alternate = [item.original_title, item.title].find(name => name && name.trim().toLowerCase() !== title.trim().toLowerCase());
+  const choices = [
+    ["Title", title, true],
+    ["Alternate title", alternate, true],
+    ["IMDb", /^tt[0-9]+$/.test(item.imdb_id) ? item.imdb_id : ""],
+    ["TMDB", item.id > 0 ? "tmdb:" + item.id : ""],
+    ["TVDB", item.media_type === "tv" && item.tvdb_id > 0 ? "tvdb:" + item.tvdb_id : ""],
+  ];
+  const buttons = [];
+  for (const [label, query, titleOnly] of choices) {
+    if (!query) continue;
+    const value = titleOnly ? query : query.split(":").at(-1);
+    const button = element("button", "button secondary", label + " · " + value);
+    button.type = "button";
+    button.dataset.query = query;
+    button.addEventListener("click", () => {
+      prowlarrQuery.value = query;
+      searchProwlarr(titleOnly);
+    });
+    buttons.push(button);
+  }
+  presets.replaceChildren(...buttons);
+  if (focusedQuery) (buttons.find(button => button.dataset.query === focusedQuery) || prowlarrQuery).focus();
 }
 
 const torrentSize = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
@@ -432,23 +462,14 @@ function renderTrackerResults(results, releases) {
   }
 }
 
-async function searchProwlarr() {
+async function searchProwlarr(titleOnly = false) {
   const query = prowlarrQuery.value.trim();
   if (!query) return;
   prowlarrRequest?.abort();
   const request = new AbortController();
   prowlarrRequest = request;
-  const item = selectedTitle && keyFor(selectedTitle) === keyFor(prowlarrItem) ? selectedTitle : prowlarrItem;
-  const params = new URLSearchParams({ q: query, kind: item.media_type, view: "tracker" });
-  const sameTitle = (title) => title.trim().toLocaleLowerCase() === query.toLocaleLowerCase();
-  const useTitleMetadata = sameTitle(displayTitle(prowlarrItem));
-  if (useTitleMetadata) {
-    const alternate = [item.original_title, item.title].find(title => title && !sameTitle(title));
-    if (alternate) params.set("alternate", alternate);
-    params.set("tmdb", item.id);
-    if (item.imdb_id) params.set("imdb", item.imdb_id);
-    if (item.tvdb_id > 0) params.set("tvdb", item.tvdb_id);
-  }
+  const params = new URLSearchParams({ q: query, kind: prowlarrItem.media_type, view: "tracker" });
+  if (titleOnly) params.set("match", "title");
   const results = byId("prowlarr-results");
   const status = byId("prowlarr-search-status");
   const notice = byId("prowlarr-search-error");
@@ -456,7 +477,7 @@ async function searchProwlarr() {
   results.replaceChildren();
   const table = byId("prowlarr-table");
   table.hidden = true;
-  status.textContent = useTitleMetadata ? "Searching Prowlarr by title and available IDs…" : "Searching Prowlarr…";
+  status.textContent = "Searching Prowlarr…";
   try {
     const releases = await api("/api/prowlarr/search?" + params, { signal: request.signal });
     if (request.signal.aborted) return;
@@ -733,6 +754,7 @@ async function showCurrentPage(focus = false) {
     if (request.signal.aborted) return;
     selectedTitle = item;
     showTitleHeader(item);
+    if (prowlarrSearchDialog.open && keyFor(prowlarrItem) === keyFor(item)) renderProwlarrPresets(item);
     renderTitleContent(item);
   } catch (error) {
     if (!request.signal.aborted) displayNotice(detailsError, error.message);
